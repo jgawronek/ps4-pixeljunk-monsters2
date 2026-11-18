@@ -155,6 +155,8 @@ export class ChibiIntroRunner {
     seed = 1,
     ground: ((x: number, z: number, fallbackY: number) => number) | null = null,
     linecast: GroundLinecast | null = null,
+    /** Intro cut-1 camera position (Unity space). When given, chibis end up facing it (see endFacingFor). */
+    facePoint: { x: number; z: number } | null = null,
   ) {
     this.rand = mulberry32(seed);
     const start = rig.world.pos;
@@ -191,7 +193,10 @@ export class ChibiIntroRunner {
       this.chibis.push(c);
       this.runners.push(new PathRunner(
         c, path, startPos, runDelay, rig.jumpDelay, rig.moveSpeed, rig.panicJumpMinVel, rig.panicJumpMaxVel,
-        rig.endFacingAngle, this.rand,
+        facePoint !== null
+          ? ChibiIntroRunner.endFacingFor(facePoint, { x: start[0] + pts[pts.length - 1][0], z: start[2] + pts[pts.length - 1][2] })
+          : rig.endFacingAngle,
+        this.rand,
       ));
       // The runner ctor placed the chibi on Sample(0) (authored offsets); snap it onto the terrain like Chibi spawns do.
       motor.pos = ChibiMotor.projectPosToGround(motor.pos, probe);
@@ -205,6 +210,12 @@ export class ChibiIntroRunner {
   update(dt: number): void {
     for (const r of this.runners) r.update(dt);
     for (const c of this.chibis) c.motor.update(dt);
+  }
+
+  /** Yaw (deg) that looks from `at` to `cam`. The authored EndFacingAngle is NOT camera-aware (stage 2: 80 deg vs 15 deg to the camera, so the
+   *  chibis ended up facing away); the original chibis visibly end up facing the intro camera, so the port aims at it. */
+  static endFacingFor(cam: { x: number; z: number }, at: { x: number; z: number }): number {
+    return (Math.atan2(cam.x - at.x, cam.z - at.z) * 180) / Math.PI;
   }
 
   /** Final facing the runners rotate to (EndFacingAngle) - exposed for tests. */

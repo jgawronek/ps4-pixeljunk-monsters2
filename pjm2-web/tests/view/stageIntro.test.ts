@@ -245,3 +245,16 @@ describe('intro chibis turn to EndFacingAngle after stopping', () => {
     }
   });
 });
+
+describe('intro chibis face the intro camera (stage 2: authored EndFacingAngle points away)', () => {
+  it('ends looking at cut-1 camera', () => {
+    const rig2: StageIntroRig = JSON.parse(readFileSync(new URL('../../public/assets/data/intro/3d_stage_002_env.json', import.meta.url), 'utf8'));
+    const cam = cameraWorldPose(rig2, rig2.cameras[0], 0).pos;
+    const r = new ChibiIntroRunner(rig2.chibiIntro as never, 1, (_x, _z, fy) => fy, null, cam);
+    for (let i = 0; i < 60 * 20; i++) r.update(1 / 60);
+    for (const c of r.chibis) {
+      const want = ChibiIntroRunner.endFacingFor(cam, { x: c.pos.x, z: c.pos.z });
+      expect(Math.abs(((((c.motor.yawDeg - want) % 360) + 540) % 360) - 180)).toBeLessThan(8);
+    }
+  });
+});

@@ -21,7 +21,7 @@ import { ChibiIntroRunner } from './ChibiIntroRunner';
 import type { GroundLinecast } from '../characters/ChibiMotor';
 import { IntroCardUi, type IntroCardText } from './IntroCardUi';
 import { IntroChibiView } from './IntroChibiView';
-import type { StageIntroRig } from './IntroRig';
+import { cameraWorldPose, type StageIntroRig } from './IntroRig';
 import { StageIntroTimeline } from './IntroTimeline';
 
 export interface StageIntroHooks {
@@ -129,7 +129,8 @@ export class StageIntroController {
     hooks.setLateHomeChibisHidden?.(true);
     const rig = this.o.rig;
     if (rig.chibiIntro !== null) {
-      const runner = new ChibiIntroRunner(rig.chibiIntro, this.o.seed ?? 1, hooks.groundY ?? null, hooks.linecast ?? null);
+      const runner = new ChibiIntroRunner(rig.chibiIntro, this.o.seed ?? 1, hooks.groundY ?? null, hooks.linecast ?? null,
+        rig.cameras.length > 0 ? cameraWorldPose(rig, rig.cameras[0], 0).pos : null);
       this.chibis = new IntroChibiView(runner, () => hooks.makeChibiRig(), hooks.decorateChibi);
       scene.add(this.chibis.root);
     }
