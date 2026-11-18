@@ -186,6 +186,7 @@ export class ChibiIntroRunner {
       motor.accMin = accMin;
       motor.accMax = CHIBI_INTRO_CONST.ACC_MAX;
       motor.enableRunSound = true; // Chibi +0x70 = 1
+      motor.followDestRot = true; // stop -> turn to EndFacingAngle -> hop (observed original behaviour)
       const c = new IntroChibi(motor);
       this.chibis.push(c);
       this.runners.push(new PathRunner(

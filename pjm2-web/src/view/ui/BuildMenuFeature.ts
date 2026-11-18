@@ -311,7 +311,8 @@ export class BuildMenuFeature {
     const ref = d.uiRoot.toRef(s.x, s.y);
     // RingController.uiPosLimitationInRate 0.42 + keep the whole ring on screen.
     const cx = Math.max(340, Math.min(1920 - 340, ref.x));
-    const cy = Math.max(330, Math.min(1080 - 330, ref.y));
+    const vis = d.uiRoot.visible();
+    const cy = Math.max(vis.yMin + 330, Math.min(vis.yMax - 330, ref.y));
     this.ui.render(this.view(cx, cy));
 
     // attack-range preview of the highlighted tower (or none in the category phase)

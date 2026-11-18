@@ -49,6 +49,9 @@ import { GameCoreProjectileTrajectory } from '../core/GameCoreProjectileTrajecto
 import { Difficulty, GameCoreWaveManager } from '../core/GameCoreWaveManager';
 import { BuildTowerCommand } from '../core/network/BuildTowerCommand';
 import { IntroSequenceSkipCommand } from '../core/network/IntroSequenceSkipCommand';
+import { HipAttackEnemyCommand } from '../core/network/HipAttackEnemyCommand';
+import { DOF_PROFILES } from '../view/stage/DepthOfField';
+import { PlayerBump } from '../view/player/PlayerBump';
 import { setSimPhysics, Q4Layers } from '../core/physics-seam';
 import { loadStageWorld, PhysicsWorld } from '../engine/physics/world';
 import { nextStage, stageConfigFor, stageFromSearch } from '../data/stageCatalog';
@@ -58,7 +61,7 @@ import { difficultyFromSearch, gameUrl, stageSelectUrl } from './stageUrls';
 import { DIFFICULTY_LABEL_KEYS } from '../view/save/StageProgress';
 import { createQueries } from '../engine/physics/queries';
 import { GroundConform } from '../view/stage/GroundConform';
-import { PlayerMover } from '../view/player/PlayerMover';
+import { PlayerMover, PLAYER_CC } from '../view/player/PlayerMover';
 import { RangeIndicator } from '../view/stage/RangeIndicator';
 import { TreeView } from '../view/stage/TreeView';
 import { applyTreeSurfaceMaps } from '../view/stage/TreeSurfaceMaps';
@@ -94,6 +97,7 @@ import { TREE_TOWER_DIRECTION } from '../data/treeTowerDirection';
 import { PlayerStageView } from '../view/characters/PlayerStageView';
 import { setTowerFlagFactory } from '../view/characters/TowerFlag';
 import { MeshParticles, loadMeshParticles, setMeshParticles } from '../view/particles/MeshParticles';
+import { SheetParticles, setSheetParticles } from '../view/particles/SheetParticles';
 import { prefabRangeRadius, detectorGroundRadius } from '../view/tower/towerRange';
 import { BLOCKING_FADE, FadedRenderers, ObjectFade } from '../view/characters/BlockingFade';
 import { ChibiStageView, quatYawDeg as quatYawDegOf } from '../view/characters/ChibiStageView';
@@ -471,9 +475,14 @@ export async function createStageSession(sh: ShellServices, opts: StageSessionOp
   // WASD = player; edge-pan off (PJM2 camera follows the tikiman, no edge pan).
   const stageCamera = new StageCamera({
     keyboardPan: false, edgeMargin: 0, fov: STAGE_ENV.camera.fov, pitchDeg: STAGE_ENV.camera.pitchDeg, yawDeg: STAGE_ENV.camera.yawDeg,
+    // Web-port extension: the original boom is fixed at 30 (min = max); the mouse wheel zooms 18..45 here (ZoomIn/ZoomOut @00448df0/00448ea0 smoothing is the original's).
+    distance: 30, minDistance: 18, maxDistance: 45,
   });
   stageCamera.resize(window.innerWidth / window.innerHeight);
   stageCamera.attach(renderer.domElement);
+
+  let wheelZoom = 0; // accumulated wheel input, consumed per frame (+ = zoom out)
+  renderer.domElement.addEventListener('wheel', (e) => { wheelZoom += Math.sign(e.deltaY); e.preventDefault(); }, { passive: false, signal: ac.signal });
 
   const picker = new GroundPicker();
   // Build-range ring (Q4.StructureRangeEffect — scale-sized mesh ring; detect
@@ -496,6 +505,9 @@ export async function createStageSession(sh: ShellServices, opts: StageSessionOp
   const particles = new ParticleSystem(2048);
   /** Mesh-mode particle emitters (rock chunks, gears, leaves): lit 3D meshes. Loaded with the emitters; null = billboard fallback. */
   let meshParticles: MeshParticles | null = null;
+  const sheetParticles = new SheetParticles();
+  setSheetParticles(sheetParticles);
+  scene.add(sheetParticles.group);
   scene.add(particles.points);
   // Real Unity ParticleSystem settings extracted from the user's own bundles
   // (tools/assets/extract_particles.py → public/assets/particles/particles.json).
@@ -763,6 +775,7 @@ export async function createStageSession(sh: ShellServices, opts: StageSessionOp
     chibiView?.update(dt);
     particles?.update(dt);
     meshParticles?.update(dt);
+    sheetParticles.update(dt);
     projectileParticles?.update(dt);
     rangeIndicator.update(dt);
     selectedRange.update(dt);
@@ -787,6 +800,7 @@ export async function createStageSession(sh: ShellServices, opts: StageSessionOp
       return;
     }
     if (!moveKeys.has(e.code)) moveKeyOrder.set(e.code, ++moveKeySeq);
+    if (!e.repeat) playerBump.press(); // EnemyStunRecoverPresses: mashing a button recovers from the bump stun
     moveKeys.add(e.code);
     }, { signal: ac.signal });
   window.addEventListener('keyup', (e) => {
@@ -840,6 +854,8 @@ export async function createStageSession(sh: ShellServices, opts: StageSessionOp
   /** Movement intent for this frame (Unity-space, |v| <= 1) consumed by stepPlayerMover. */
   const moverIntent = { x: 0, z: 0 };
   let walkStuckTime = 0;
+  /** Enemy contact bump (PlayerMotor.BumpEnemyLogic / BumpPlayer): knockback, 3.5 s stun (5 presses recover), 2 s invulnerability, coin spill. */
+  const playerBump = new PlayerBump();
 
   /**
    * Advance the original-faithful locomotion (PlayerMover = PlayerMotor +
@@ -858,7 +874,25 @@ export async function createStageSession(sh: ShellServices, opts: StageSessionOp
     if (Math.abs(p.position.x - m.x) > 0.02 || Math.abs(p.position.z - m.z) > 0.02) {
       m.teleportToGround(p.position.x, p.position.z);
     }
-    m.update(dt, moverIntent, { run: moveKeys.has('ShiftLeft') || moveKeys.has('ShiftRight') });
+    playerBump.tick(dt);
+    if (playerBump.stunned) { moverIntent.x = 0; moverIntent.z = 0; walkTarget = null; }
+    m.update(dt, moverIntent, { run: moveKeys.has('ShiftLeft') || moveKeys.has('ShiftRight'), canMove: !playerBump.stunned });
+    // Enemy contact (OnTriggerEnter/Stay on the enemy trigger volumes): bump the player away and arm the loose-coin spill.
+    if (m.mode === 'normal' && playerBump.canBeBumped && outcome === null && !(introController?.active ?? false)) {
+      const player = { x: m.x, y: m.y, z: m.z };
+      for (const e of world!.core.allObjects<GameCoreEnemy>(GameCoreEnemy)) {
+        if (e.life <= 0 || e.isDestroyed()) continue;
+        const c = e.collision;
+        if (!PlayerBump.touching(player, PLAYER_CC.radius, PLAYER_CC.height, { x: e.position.x, y: e.position.y, z: e.position.z }, c.radius, c.height)) continue;
+        const r = playerBump.bump(player, { x: e.position.x, y: e.position.y, z: e.position.z });
+        if (r === null) break;
+        m.vx = r.velocity.x; m.vy = r.velocity.y; m.vz = r.velocity.z;
+        m.groundedCC = false;
+        world!.driver.addPlayerCommand(
+          new HipAttackEnemyCommand(e.handle, 0, r.drop.coins, r.drop.gems, r.drop.valuePerCoin, r.drop.valuePerGem), world!.player);
+        break;
+      }
+    }
     p.position = new Vector3(f(m.x), f(m.y), f(m.z));
     if (m.mode !== 'normal') { playerMoveUnity.x = 0; playerMoveUnity.z = 0; walkTarget = null; }
     // click-to-walk that cannot make progress (wall/river bank) gives up
@@ -1280,8 +1314,11 @@ export async function createStageSession(sh: ShellServices, opts: StageSessionOp
       }
     }
 
+    if (wheelZoom !== 0) { if (wheelZoom > 0) stageCamera.zoomOut(1, 0.25 * wheelZoom); else stageCamera.zoomIn(1, -0.25 * wheelZoom); wheelZoom = 0; }
     stageCamera.update(dt);
     introController?.applyCamera(); // intro cut overrides the follow pose until the hand-off
+    // PPSv1 DoF: only the GameCameraIntro01 cut uses 3d_stage_NNN_behind_pp (DoF enabled); Intro02 / TopDown use topdown_pp (DoF off).
+    waterPass.setDof(introController !== null && introController.active && !introController.timeline.followActive && introController.timeline.cutIndex === 0 ? DOF_PROFILES.stageBehind : null);
     waterPass.render(stageCamera.camera);
 
     const frameMs = wallDelta * 1000;
@@ -2168,6 +2205,7 @@ export async function createStageSession(sh: ShellServices, opts: StageSessionOp
     });
     safe('range', () => rangeIndicator.dispose());
     safe('selection outline', () => { selOutline?.h.dispose(); selOutline = null; });
+    safe('sheet particles', () => { setSheetParticles(null); sheetParticles.dispose(); });
     safe('mesh particles', () => { setMeshParticles(null); meshParticles?.dispose(); meshParticles = null; });
     safe('particles', () => { particles.dispose(); projectileParticles?.dispose(); projectileParticles = null; });
     safe('stage view', () => { stageViewRef?.dispose(); stageViewRef = null; });

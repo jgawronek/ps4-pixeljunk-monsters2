@@ -22,7 +22,7 @@
 // selection 0.95; documented approximation.
 
 import type { UiAssets } from './UiAssets';
-import { css, place, spriteEl, TEXT, textEl } from './UiDom';
+import { bleed, css, place, spriteEl, TEXT, textEl } from './UiDom';
 
 export interface RingSlotView {
   slot: number;
@@ -96,7 +96,8 @@ export class BuildMenuUi {
 
   constructor(private readonly assets: UiAssets, private readonly host: HTMLElement) {
     this.backdrop = document.createElement('div');
-    css(this.backdrop, { position: 'absolute', left: '0', top: '0', width: '1920px', height: '1080px', display: 'none', pointerEvents: 'auto' });
+    css(this.backdrop, { display: 'none', pointerEvents: 'auto' });
+    bleed(this.backdrop); // click outside anywhere in the window cancels
     this.backdrop.addEventListener('pointerdown', (e) => { e.stopPropagation(); this.cb?.cancel(); });
     this.ring = document.createElement('div');
     css(this.ring, { position: 'absolute', left: '0', top: '0', width: '0', height: '0', display: 'none', pointerEvents: 'none' });

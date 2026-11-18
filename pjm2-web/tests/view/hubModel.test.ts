@@ -119,7 +119,7 @@ describe('title camera / tikiman (GameCameraTitle)', () => {
     expect(c.forward[2]).toBeLessThan(-0.98);
     expect(c.forward[1]).toBeCloseTo(0.1464, 3);
     const t = titleTikimanPose();
-    expect(t.pos).toEqual([0, 0, 1]); // 1 m in front of the title home (see HubModel.titleTikimanPose)
+    expect(t.pos).toEqual([0.715, 0, 1.9]); // StartIntroAnimation fallback pose (m_tikimanLocator unassigned)
     expect(t.forward).toEqual([0, 0, 1]);
   });
   it('rainbow backdrop clips are 1 s fades (no camera transform curves)', () => {
@@ -137,8 +137,8 @@ describe('title camera / tikiman (GameCameraTitle)', () => {
     const portals = hubPortals(inCatalog);
     const p = portals.find((q) => q.stage === '3d_stage_002')!;
     expect(startPosition('3d_stage_002', portals)).toEqual(p.spawnPositions[0]);
-    expect(startPosition('', portals)).toEqual([0, 0, 1]);
-    expect(startPosition(null, portals)).toEqual([0, 0, 1]);
-    expect(startPosition('nope', portals)).toEqual([0, 0, 1]);
+    expect(startPosition('', portals)).toEqual([0.715, 0, 1.9]);
+    expect(startPosition(null, portals)).toEqual([0.715, 0, 1.9]);
+    expect(startPosition('nope', portals)).toEqual([0.715, 0, 1.9]);
   });
 });

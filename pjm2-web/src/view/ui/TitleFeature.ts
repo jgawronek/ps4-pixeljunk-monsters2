@@ -15,6 +15,7 @@ import type { UiAssets } from './UiAssets';
 import { css, place, spriteEl, TEXT, UiRoot } from './UiDom';
 import { f1 } from './TitleUiKit';
 import { TITLE_MASK_CLIP } from './titleMaskClip.generated';
+import { TITLE_CLIPS } from './titleClips.generated';
 import { TITLE_ENTRIES, TITLE_TIMES, type TitleModel } from './TitleModel';
 import type { StringLookup } from './WaveCalls';
 
@@ -54,6 +55,18 @@ export function maskPose(clock: number): { left: number; top: number; rot: numbe
   return { left: ax - 74, top: -ay - 50, rot: sampleTrack(tr.rotZ, t), sx: sampleTrack(tr.scaleX, t), sy: sampleTrack(tr.scaleY, t) };
 }
 
+/** Exact Unity cubic segment evaluation of a decoded clip channel ([t,c0,c1,c2,c3] keys). */
+export function clipValue(clip: string, node: string, prop: string, t: number): number | null {
+  const keys = TITLE_CLIPS[clip]?.nodes[node]?.[prop];
+  if (!keys || keys.length === 0) return null;
+  const c = TITLE_CLIPS[clip];
+  const tt = c.loop && c.length > 0 ? t % c.length : Math.min(Math.max(t, 0), c.length);
+  let k = keys[0];
+  for (const key of keys) { if (key[0] <= tt) k = key; else break; }
+  const dt = tt - k[0];
+  return ((k[1] * dt + k[2]) * dt + k[3]) * dt + k[4];
+}
+
 const easeOut = (x: number): number => 1 - Math.pow(1 - Math.min(1, Math.max(0, x)), 3);
 const backOut = (x: number): number => {
   const c1 = 1.70158;
@@ -74,6 +87,7 @@ export class TitleFeature {
   private readonly entryOn: HTMLElement[] = [];
   private readonly entryOff: HTMLElement[] = [];
   private readonly footer: HTMLDivElement;
+  private readonly footerBottom: HTMLDivElement;
   private clock = 0;
   private shownSel = -1;
 
@@ -123,10 +137,14 @@ export class TitleFeature {
     css(this.footer, { position: 'absolute', left: '0', top: '0', width: '1920px', height: '1080px', pointerEvents: 'none' });
     const copy = spriteEl(this.assets, 'title_copy', L.copy.w, L.copy.h);
     place(copy, L.copy.x, L.copy.y);
-    this.footer.appendChild(copy);
+    // copyright plank hugs the BOTTOM edge, the version tag the TOP edge (UiRoot bands), on any window aspect
+    this.footerBottom = document.createElement('div');
+    css(this.footerBottom, { position: 'absolute', left: '0', top: '0', width: '0', height: '0', pointerEvents: 'none' });
+    this.footerBottom.appendChild(copy);
+    this.root.bottom.appendChild(this.footerBottom);
     const ver = f1(this.assets, `${t('tl_title_010', 'ver.')} 0001`, L.version.x, L.version.y, { scale: 0.45, align: 'left', tint: TEXT.dim.tint });
     this.footer.appendChild(ver);
-    this.layer.appendChild(this.footer);
+    this.root.top.appendChild(this.footer);
 
     this.press = f1(this.assets, t('tl_title_004', 'Press any button'), L.pressAny.x, L.pressAny.y, { scale: 1.05 });
     this.layer.appendChild(this.press);
@@ -182,13 +200,19 @@ export class TitleFeature {
     let pjA = 1;
     let numS = 1;
     let numA = 1;
+    let numDy = 0;
+    let numRot = 0;
     if (ph === 'gate') { logoA = 0; pjA = 0; numA = 0; }
     else if (ph === 'intro') {
-      logoA = Math.min(1, ci / 0.4);
-      logoDy = (1 - backOut(ci / 1.2)) * -360;
-      pjA = easeOut((ci - 0.6) / 0.5);
-      numA = Math.min(1, Math.max(0, (ci - 1.2) / 0.2));
-      numS = ci < 1.2 ? 0 : backOut((ci - 1.2) / 0.6);
+      // InStart clip (2.5 s): title_m2_logo y 696 -> -579 (overshoot spring), title_number y 548 -> -727 + z wobble,
+      // pixeljunk logo alpha 0 -> 1 over 1.2..1.533 s (exact cubic keys, canvas y is up)
+      const lg = clipValue('InStart', 'title_m2_logo', 'm_AnchoredPosition.y', ci) ?? -579;
+      logoDy = -(lg + 579); logoA = 1;
+      const nm = clipValue('InStart', 'title_number', 'm_AnchoredPosition.y', ci) ?? -727;
+      numDy = -(nm + 727);
+      numRot = clipValue('InStart', 'title_number', 'localEulerAnglesRaw.z', ci) ?? 0;
+      pjA = clipValue('InStart', 'title_pixeljunk_logo', 'attr2278600012', ci) ?? 1;
+      numA = 1;
     } else if (ph === 'hiding') {
       const k = easeOut(m.progress);
       logoA = 1 - k; pjA = 1 - k; numA = 1 - k;
@@ -203,12 +227,21 @@ export class TitleFeature {
     this.logoBox.style.transform = `translateY(${logoDy}px)`;
     this.pj.style.opacity = String(pjA);
     this.num.style.opacity = String(numA);
-    this.num.style.transform = `translate(-50%, -50%) scale(${numS})`;
+    if (ph === 'pressStart' || ph === 'startOut') {
+      // StartIdle (4 s loop) / StartOut: the "2" keeps swaying
+      const cl = ph === 'pressStart' ? 'StartIdle' : 'StartOut';
+      const tt = ph === 'pressStart' ? this.clock : ci;
+      numDy = -((clipValue(cl, 'title_number', 'm_AnchoredPosition.y', tt) ?? -727) + 727);
+      numRot = clipValue(cl, 'title_number', 'localEulerAnglesRaw.z', tt) ?? 0;
+    }
+    this.num.style.transform = `translate(-50%, -50%) translateY(${numDy}px) rotate(${-numRot}deg) scale(${numS})`;
     // the mask pops out of the "O" at 10 s / 27 s / 53 s of the 60.2 s LogoMonster loop (exact clip tracks)
     const mp = maskPose(this.clock);
     css(this.skull, { left: `${mp.left}px`, top: `${mp.top}px`, transform: `rotate(${-mp.rot}deg) scale(${mp.sx}, ${mp.sy})` });
     // ---- footer (copyright/version) visible with the logo
-    this.footer.style.opacity = String(ph === 'gate' ? 0 : ph === 'intro' ? easeOut((ci - 1.0) / 0.6) : ph === 'away' ? 0 : ph === 'hiding' ? 1 - easeOut(m.progress) : ph === 'returning' ? easeOut(m.progress) : 1);
+    const footerA = String(ph === 'gate' ? 0 : ph === 'intro' ? easeOut((ci - 1.0) / 0.6) : ph === 'away' ? 0 : ph === 'hiding' ? 1 - easeOut(m.progress) : ph === 'returning' ? easeOut(m.progress) : 1);
+    this.footer.style.opacity = footerA;
+    this.footerBottom.style.opacity = footerA;
     // ---- "Press any button" blink (StartIdle)
     const showPress = ph === 'pressStart' || (ph === 'gate');
     const blink = 0.55 + 0.45 * Math.sin(this.clock * 4);

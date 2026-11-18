@@ -234,3 +234,14 @@ describe('ChibiIntroRunner (PathRunner port)', () => {
     expect(CHIBI_INTRO_CONST.SLOWDOWN_SCALE).toBe(4);
   });
 });
+
+describe('intro chibis turn to EndFacingAngle after stopping', () => {
+  it('ends facing 296 deg (-64) once the run is over', () => {
+    const r = new ChibiIntroRunner(rig.chibiIntro as never, 1, () => 0);
+    for (let i = 0; i < 60 * 14; i++) r.update(1 / 60);
+    for (const c of r.chibis) {
+      const d = ((((c.motor.yawDeg - 296) % 360) + 540) % 360) - 180;
+      expect(Math.abs(d)).toBeLessThan(1);
+    }
+  });
+});

@@ -126,6 +126,9 @@ def keep(table, key):
             return True
         if key in ('tl_guide_title_02_01', 'tl_guide_detail_02_01'):
             return True
+        # every tip title/detail the loading screen can show (Q4.LoadingTipsMap.tipSettings tip/title keys)
+        if key.startswith(('tl_guide_title_', 'tl_guide_detail_')):
+            return True
         for s in GUIDE_KEEP_SERIES:
             if key.startswith(f'tl_guide_title_{s}_') or key.startswith(f'tl_guide_detail_{s}_'):
                 return True

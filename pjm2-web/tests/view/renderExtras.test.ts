@@ -120,7 +120,8 @@ describe('weather (StageWeatherPlayer port)', () => {
     const tgt = new THREE.Vector3();
     for (let i = 0; i < 70; i++) v.update(1 / 60, tgt);
     expect(v.alive).toBeGreaterThan(20);
-    for (let i = 0; i < 60 * 20; i++) v.update(1 / 60, tgt);
+    // emission duration + the longest random particle lifetime can exceed 20 s: give it a generous bound (was flaky at 20 s)
+    for (let i = 0; i < 60 * 90; i++) v.update(1 / 60, tgt);
     expect(v.alive).toBe(0);
   });
   it('alpha gradient', () => {

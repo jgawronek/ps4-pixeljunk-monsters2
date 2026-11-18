@@ -34,12 +34,14 @@ import { SkyAtmosphere } from '../view/stage/SkyAtmosphere';
 import { StageCamera } from '../view/stage/StageCamera';
 import { stageEnvironmentFor, skyEnvTextureUrl } from '../view/stage/StageEnvironment';
 import { StageSceneView } from '../view/stage/StageSceneView';
+import { DOF_PROFILES } from '../view/stage/DepthOfField';
 import { WaterPass } from '../view/stage/WaterPass';
 import {
   hiddenLockNodes, hubPortals, lockCanUnlock, lockIsUnlocked, lockMissingRainbows, portalVisible, removedBlockerColliders,
   selectArea, selectLock, selectPortal, stagesOpenedBy, startPosition, titleCameraPose, titleTikimanPose, type CameraPose, type V3,
 } from '../view/hub/HubModel';
 import { disposeObject3D } from './disposeThree';
+import { HubHut } from '../view/hub/HubHut';
 
 export type HubMode = 'title' | 'select' | 'credits';
 
@@ -139,6 +141,13 @@ export async function createHubSession(sh: HubServices): Promise<HubSession> {
     skyReady,
   ]);
 
+  // ---- title hut (skinned home_001_comp + curtain animator; the stage extractor skips skinned renderers) ----
+  let hut: HubHut | null = null;
+  if (!search.has('nohut')) {
+    hut = await HubHut.load(stageView.materials.get('home_001_m') ?? null);
+    if (hut !== null) scene.add(hut.root);
+  }
+
   // ---- physics + mover --------------------------------------------------------------------
   const loader = defaultFileLoader(`${BASE}physics`);
   let physics: PhysicsWorld | null = null;
@@ -187,6 +196,17 @@ export async function createHubSession(sh: HubServices): Promise<HubSession> {
     playerView?.face({ x: titleStand.forward[0], z: titleStand.forward[2] });
   }
   standOnTitleSpot();
+  /** Q4.TitleScreenController `m_hasSeenTitleIntro` (+0xb3): the hut/entrance plays once per session, later shows use TitleScreenEnterV2. */
+  let titleIntroPlayed = false;
+  function startTitleAnim(): void {
+    if (!titleIntroPlayed) hut?.playCurtain(); // StartIntroAnimation: Home Animator.SetTrigger(TitleScreenEnter), first show only
+    playerView?.startTitle(!titleIntroPlayed);
+    titleIntroPlayed = true;
+  }
+  playerView?.holdTitleEnter(); // InitIntroAnimation: TitleScreenEnterWait until the title intro starts
+  // The title model's intro phase (jingle) starts the entrance (TitleScreenController.StartIntroAnimation).
+  if ((window as unknown as { __pjm2TitleIntro?: boolean }).__pjm2TitleIntro === true) startTitleAnim(); // the title intro began before the hub finished loading
+  window.addEventListener('pjm2:titleIntro', () => { if (!disposed && mode === 'title') startTitleAnim(); }, { signal: ac.signal });
 
   // ---- node visibility (AreaLock barriers, stage rainbows) ----------------------------------
   const meshesByNode = new Map<number, THREE.Object3D[]>();
@@ -298,6 +318,7 @@ export async function createHubSession(sh: HubServices): Promise<HubSession> {
     if (next === 'select') {
       const last = save?.getLastPlayStageName() ?? null;
       const start = startPosition(last === '' ? null : last, portals);
+      playerView?.endTitle(); // TitleScreenExit -> Idle
       placePlayer(start);
       mover?.teleportToGround(start[0], start[2]);
       if (mover !== null) { player.y = mover.y; }
@@ -306,13 +327,13 @@ export async function createHubSession(sh: HubServices): Promise<HubSession> {
       applyNodeVisibility();
     } else {
       blendTarget = 0;
-      if (prev === 'select') standOnTitleSpot();
+      if (prev === 'select') { standOnTitleSpot(); startTitleAnim(); }
     }
     if (next === 'credits') {
       // Staff credits: the original plays `3d_stage_000_credit` with the tikiman dancing to sfx_tiki_creditdance.
       playerView?.startBuildDance(1e9);
     } else if (prev === 'credits' && playerView !== null) {
-      playerView.setMoving(true); playerView.setMoving(false); // cancels the dance loop -> idle
+      startTitleAnim(); // back on the title: TitleScreenIdle (V2 path)
     }
     recompute(performance.now());
   }
@@ -355,6 +376,7 @@ export async function createHubSession(sh: HubServices): Promise<HubSession> {
       recompute(nowMs);
     }
     playerView?.update(dt);
+    hut?.update(dt);
     stageView.tickWater(dt);
 
     // camera: follow pose (GameCameraTopDown) <-> title pose, eased
@@ -372,6 +394,7 @@ export async function createHubSession(sh: HubServices): Promise<HubSession> {
     viewCam.fov = titlePose.fov + (stageCamera.camera.fov - titlePose.fov) * e;
     viewCam.updateProjectionMatrix();
     viewCam.updateMatrixWorld(true);
+    waterPass.setDof(blendTarget === 0 && blend < 0.5 ? DOF_PROFILES.title : null); // GameCameraTitle -> 3d_stage_title_1_pp (DoF on); the follow camera is topdown_pp (off)
     waterPass.render(viewCam);
   }
 
@@ -389,6 +412,7 @@ export async function createHubSession(sh: HubServices): Promise<HubSession> {
     safe('listeners', () => ac.abort());
     safe('outline/toon', () => { outlineHandle?.dispose(); toonHandle?.dispose(); });
     safe('skeleton', () => characterRoot.traverse((o) => { (o as THREE.SkinnedMesh).skeleton?.dispose(); }));
+    safe('hut', () => hut?.dispose());
     safe('player', () => playerView?.dispose());
     safe('stage view', () => stageView.dispose());
     safe('water pass', () => waterPass.dispose());

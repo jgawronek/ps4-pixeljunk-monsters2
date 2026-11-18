@@ -244,20 +244,21 @@ export class GameUiFeature {
     if (lead === null) { this.hud.setAlert(null); return; }
     const s = this.deps.project(lead.position, 1.2);
     const r = this.root.toRef(s.x, s.y);
-    const inside = s.visible && r.x > 80 && r.x < 1840 && r.y > 80 && r.y < 1000;
+    const vis = this.root.visible(); // real window rows in reference px (not 0..1080)
+    const inside = s.visible && r.x > 80 && r.x < 1840 && r.y > vis.yMin + 80 && r.y < vis.yMax - 80;
     const arrowOn = this.trackT > TRACK_TEXT_SECONDS - TRACK_ARROW_SECONDS;
     if (inside) {
       // on screen: bubble hovers above the enemy until the arrow time is over
       if (!arrowOn) { this.hud.setAlert(null); return; }
-      this.hud.setAlert({ x: r.x, y: Math.max(110, r.y - 150), angle: 180, showText: true });
+      this.hud.setAlert({ x: r.x, y: Math.max(vis.yMin + 110, r.y - 150), angle: 180, showText: true });
       return;
     }
     const cx = 960;
-    const cy = 540;
+    const cy = (vis.yMin + vis.yMax) / 2;
     let dx = r.x - cx;
     let dy = r.y - cy;
     if (!s.visible) { dx = -dx; dy = -dy; }
-    const k = Math.min(Math.abs((960 - 130) / (dx || 1e-6)), Math.abs((540 - 130) / (dy || 1e-6)));
+    const k = Math.min(Math.abs((960 - 130) / (dx || 1e-6)), Math.abs((vis.height / 2 - 130) / (dy || 1e-6)));
     const x = cx + dx * k;
     const y = cy + dy * k;
     const angle = (Math.atan2(dx, -dy) * 180) / Math.PI;

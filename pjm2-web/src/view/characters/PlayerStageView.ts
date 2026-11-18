@@ -135,6 +135,50 @@ export class PlayerStageView {
     this.mixer.addEventListener('finished', onDone);
   }
 
+  /** Title screen (tikiman_ctrl states 11/14/12): first show = TitleScreenEnter (tikiman_title_enter, 4.5 s, one-shot) -> TitleScreenIdle
+   *  (tikiman_title_idle_02 loop, exit time 0.95 / 0 s blend); later shows = trigger TitleScreenEnterV2: Idle -> TitleScreenIdle in 0.5 s. */
+  startTitle(firstTime: boolean): void {
+    this.dance = null;
+    this.moving = false;
+    const idle = (fade: number): void => {
+      const clip = this.rig.clips.find((c) => c.name === 'tikiman_title_idle_02');
+      if (!clip) { this.resumeLocomotion(); return; }
+      const action = this.mixer.clipAction(clip);
+      action.reset();
+      action.setLoop(THREE.LoopRepeat, Infinity);
+      if (this.currentAction !== null && this.currentAction !== action) this.currentAction.crossFadeTo(action, fade, false);
+      action.play();
+      this.currentAction = action;
+    };
+    const enter = this.rig.clips.find((c) => c.name === 'tikiman_title_enter');
+    if (!firstTime || !enter) { idle(0.5); return; }
+    this.playOnce('tikiman_title_enter');
+    const action = this.currentAction;
+    const onDone = (e: { action: THREE.AnimationAction }): void => {
+      if (e.action !== action) return;
+      this.mixer.removeEventListener('finished', onDone);
+      idle(0);
+    };
+    this.mixer.addEventListener('finished', onDone);
+  }
+
+  /** TitleScreenEnterWait (state 11, speed 0): frame 0 of tikiman_title_enter held until the entrance trigger. */
+  holdTitleEnter(): void {
+    const clip = this.rig.clips.find((c) => c.name === 'tikiman_title_enter');
+    if (!clip) return;
+    this.dance = null;
+    const a = this.mixer.clipAction(clip);
+    a.reset();
+    a.setLoop(THREE.LoopOnce, 1);
+    a.play();
+    a.paused = true;
+    this.mixer.update(0);
+    this.currentAction = a;
+  }
+
+  /** TitleScreenExit (Play pressed / leaving the title): back to the normal Idle/Run locomotion. */
+  endTitle(): void { this.resumeLocomotion(); }
+
   update(dt: number): void {
     this.mixer.update(dt);
     this.decorator.updateTransforms(); // LateUpdate: parts follow the posed body

@@ -20,6 +20,7 @@ import type { EmitterRecord } from '../particles/ExtractedEmitter';
 import { emitterToBurstOptions } from '../particles/ExtractedEmitter';
 import type { LoopHandle, ParticleSystem } from '../particles/ParticleSystem';
 import { getMeshParticles, type MeshHandle } from '../particles/MeshParticles';
+import { getSheetParticles } from '../particles/SheetParticles';
 import type { EffectNode } from './projectileTypes';
 import type { Q4, V3 } from './projectileMath';
 
@@ -92,6 +93,12 @@ export class ProjectileEffects {
       if (rec === undefined) continue;
       const at = new THREE.Vector3(-c.pos.x, c.pos.y, c.pos.z);
       const mesh = getMeshParticles();
+      const sheet = getSheetParticles();
+      if (sheet !== null && sheet.handles(rec)) {
+        // texture-sheet flipbook sprites (ice spray, flames, explosions)
+        spawned += sheet.burst(rec, at, emissionAxisThree(c.rot), scale);
+        continue;
+      }
       if (mesh !== null && mesh.handles(c.emitter)) {
         // ParticleSystemRenderer RenderMode Mesh (ice shards, rock chunks): lit 3D meshes, not billboards
         spawned += mesh.burst(rec, at, emissionAxisThree(c.rot), scale);
@@ -114,8 +121,9 @@ export class ProjectileEffects {
    *  re-poses it every frame; `stop` = ParticleGroup.StopLoopingThenDestroy. */
   startLooping(prefab: string, pos: V3, rot: Q4): { update(pos: V3, rot: Q4): void; stop(): void } {
     const node = this.effects[prefab];
-    const parts: { handle: LoopHandle | MeshHandle; origin: THREE.Vector3; axis: THREE.Vector3; child: EffectNode }[] = [];
+    const parts: { handle: LoopHandle | MeshHandle | { stop(): void }; origin: THREE.Vector3; axis: THREE.Vector3; child: EffectNode }[] = [];
     const mesh = getMeshParticles();
+    const sheet = getSheetParticles();
     if (node !== undefined) {
       const kids: EffectNode[] = [];
       const collect = (n: EffectNode): void => {
@@ -128,7 +136,8 @@ export class ProjectileEffects {
         if (rec === undefined) continue;
         const origin = new THREE.Vector3();
         const axis = new THREE.Vector3(0, 1, 0);
-        const handle = mesh !== null && mesh.handles(k.name) ? mesh.startLoop(rec, origin, axis) : this.ps.startLoop({ rec, origin, axis });
+        const handle = sheet !== null && sheet.handles(rec) ? sheet.startLoop(rec, origin, axis)
+          : mesh !== null && mesh.handles(k.name) ? mesh.startLoop(rec, origin, axis) : this.ps.startLoop({ rec, origin, axis });
         parts.push({ handle, origin, axis, child: k });
         this.counters.loopsStarted++;
       }

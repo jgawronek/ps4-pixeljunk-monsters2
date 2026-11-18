@@ -170,15 +170,12 @@ export function titleCameraPose(): CameraPose {
   return { pos: c.pos as unknown as V3, forward: c.forward as unknown as V3, up: c.up as unknown as V3, fov: c.fov ?? 50 };
 }
 
-/** tikiman_01's authored position/facing in the hub scene = where the title shows him (tikimanLocator is a level3 object whose
- *  transform is not decodable; the title camera is authored around this point, see docs). */
-export const TITLE_TIKIMAN_FRONT_OFFSET = 1.0;
+/** TitleScreenController.StartIntroAnimation @00545740: the m_tikimanLocator field is UNASSIGNED in the shipped title scene (no MonoBehaviour in
+ *  level3 references the locator Transform), so the saved pose is the code's fallback `new Vector3(0.715, 0, 1.9)` (consts @0xB7CFD0/@0xB7CFD4) with
+ *  Quaternion.identity (facing +Z, towards GameCameraTitle); the ground snap supplies y. */
+export const TITLE_TIKIMAN_SPOT: V3 = [0.715, 0, 1.9];
 export function titleTikimanPose(): { pos: V3; forward: V3 } {
-  const p = HUB_SCENE.player;
-  const base = (p?.pos ?? [0, 0, 0]) as unknown as V3;
-  // The authored origin is INSIDE the title home (`home_001_title_pa` at the origin = the stone disc): stand TITLE_TIKIMAN_FRONT_OFFSET in front of it,
-  // towards GameCameraTitle (+Z). UNVERIFIED stand-in for the undecodable `tikimanLocator`.
-  return { pos: [base[0], base[1], base[2] + TITLE_TIKIMAN_FRONT_OFFSET], forward: (p?.forward ?? [0, 0, 1]) as unknown as V3 };
+  return { pos: [TITLE_TIKIMAN_SPOT[0], TITLE_TIKIMAN_SPOT[1], TITLE_TIKIMAN_SPOT[2]], forward: [0, 0, 1] };
 }
 
 /** Sample of the `ShowRainbowTitle` / `HideRainbow` clips of the GameCameraTitle animator: they only toggle an active flag

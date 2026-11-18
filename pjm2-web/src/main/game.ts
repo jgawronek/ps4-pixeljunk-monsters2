@@ -20,6 +20,7 @@ import { createBrowserAssetCache } from '../view/cache/AssetCache';
 import { initPacks } from '../view/pack/bootPacks';
 import { createBrowserSaveData } from '../view/save/SaveData';
 import { loadUiAssets } from '../view/ui/UiAssets';
+import { LoadingScreenUi } from '../view/loading/LoadingScreenUi';
 import { loadStrings, t } from '../view/ui/UiText';
 import { simGlobalCounters } from './simReset';
 import { flow, type FlowContext } from './flow';
@@ -99,6 +100,20 @@ const initialDifficulty = difficultyFromSearch(window.location.search) as 0 | 1 
 
 // ---- loading overlay ---------------------------------------------------------------
 
+/** Original loading screen (Q4.LoadingScreen: background + tips); created lazily once the UI assets are available. */
+let loadingUi: LoadingScreenUi | null = null;
+void uiAssetsLoad.then((a) => { loadingUi = new LoadingScreenUi(a, (k, f) => (stringTable[k] !== undefined && stringTable[k] !== '' ? stringTable[k] : f)); }).catch(() => { /* plain overlay */ });
+/** Dev progress overlay shown over the picture: bar + text hugging the bottom edge, no opaque backdrop. */
+function styleLoadingOverImage(on: boolean): void {
+  loading.style.background = on ? 'transparent' : '#0a0e12';
+  loading.style.justifyContent = on ? 'flex-end' : 'center';
+  loading.style.paddingBottom = on ? '28px' : '0';
+  loading.style.boxSizing = 'border-box';
+  loading.style.zIndex = on ? '41' : '30';
+  const first = loading.firstElementChild as HTMLElement | null;
+  if (first !== null) first.style.display = on ? 'none' : '';
+}
+
 function showLoading(label: string): void {
   loading.style.display = 'flex';
   loading.style.background = '#0a0e12';
@@ -108,9 +123,21 @@ function showLoading(label: string): void {
   startButton.style.display = 'none';
   loadingBar.style.width = '0%';
   loadingText.textContent = label;
+  if (loadingUi !== null) {
+    if (!loadingUi.active || loadingUi.hiding) loadingUi.show();
+    styleLoadingOverImage(true);
+    for (const c of Array.from(loading.children)) if (c !== loading.firstElementChild && (c as HTMLElement).id !== 'loading-track' && (c as HTMLElement).id !== 'loading-text') (c as HTMLElement).style.display = 'none';
+    loading.firstElementChild && ((loading.firstElementChild as HTMLElement).style.display = 'none');
+  } else styleLoadingOverImage(false);
 }
 
 function hideLoading(): void {
+  if (loadingUi !== null && loadingUi.active) {
+    // keep the dev bar out of the fade; the picture fades itself (>= 1 s on screen, then the 1 s Out clip)
+    loading.style.display = 'none';
+    loadingUi.hide();
+    return;
+  }
   loading.style.display = 'none';
 }
 

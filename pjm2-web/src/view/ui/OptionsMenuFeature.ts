@@ -7,7 +7,7 @@
 //   action_bt_04_win @ (1326,421). Background: common_bg_01 wash over the scene.
 
 import type { UiAssets } from './UiAssets';
-import { css, place, spriteEl, TEXT, UiRoot } from './UiDom';
+import { bleed, css, place, spriteEl, TEXT, UiRoot } from './UiDom';
 import { bgWash, drawDialog, f1, f2 } from './TitleUiKit';
 import { OPTION_ROWS, type OptionsModel } from './OptionsModel';
 import type { StringLookup } from './WaveCalls';
@@ -42,7 +42,7 @@ export class OptionsMenuFeature {
   ) {
     this.root = root ?? new UiRoot(23);
     this.layer = document.createElement('div');
-    css(this.layer, { position: 'absolute', left: '0', top: '0', width: '1920px', height: '1080px', pointerEvents: 'auto', overflow: 'hidden' });
+    css(this.layer, { position: 'absolute', left: '0', top: '0', width: '1920px', height: '1080px', pointerEvents: 'auto', overflow: 'visible' });
     this.root.el.appendChild(this.layer);
     this.root.el.style.display = 'none';
   }
@@ -141,7 +141,8 @@ export class OptionsMenuFeature {
     if (this.controlsOpen) this.drawControls(L);
     if (this.model.dialog !== null) {
       const dim = document.createElement('div');
-      css(dim, { position: 'absolute', left: '0', top: '0', width: '1920px', height: '1080px', background: 'rgba(0,0,0,0.35)', pointerEvents: 'auto' });
+      css(dim, { background: 'rgba(0,0,0,0.35)', pointerEvents: 'auto' });
+      bleed(dim);
       L.appendChild(dim);
       drawDialog(A, t, L, { text: t(this.model.dialog.text, ''), kind: 'yesno', yes: this.model.dialog.yes },
         (y) => hooks.answer?.(y), (y) => hooks.focus?.(y));
@@ -155,7 +156,8 @@ export class OptionsMenuFeature {
     const A = this.assets;
     const t = this.t;
     const p = document.createElement('div');
-    css(p, { position: 'absolute', left: '0', top: '0', width: '1920px', height: '1080px', background: 'rgba(0,0,0,0.55)', pointerEvents: 'auto' });
+    css(p, { background: 'rgba(0,0,0,0.55)', pointerEvents: 'auto' });
+    bleed(p);
     p.addEventListener('pointerdown', (e) => { e.stopPropagation(); this.hooks.click?.(0); });
     L.appendChild(p);
     const rows: Array<[string, string]> = [

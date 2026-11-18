@@ -143,3 +143,21 @@ the barrier colliders (`removedBlockerColliders`)). Rainbow arches follow the sa
 * **Load cost**: the hub's textures_webp are 243 MB (all areas' terrain sets); decode is progressive but heavy on software GL. `game.html` still preloads the
   stage-1 scene files (`<link rel=preload>`) that the hub path does not use (harmless console warning).
 * Screens of the original for comparison were not available; the look is compared only through the data (environment row above).
+
+
+## 2.7 Title intro in 3D (hut + tikiman entrance) — decoded from the original
+
+`TitleScreenController.StartIntroAnimation @00545740` (+ `InitIntroAnimation`, `Show`):
+* `InitIntroAnimation`: player animator trigger `TitleScreenEnterWait` -> tikiman_ctrl state 11 (`tikiman_title_enter` at speed 0 = frame 0 held, tag `TitleIdle`).
+* `StartIntroAnimation`: player disabled; first show (`+0xb3 == 0`): `FindGameObjectWithTag("Home")` -> Animator trigger `TitleScreenEnter` => `home_001_ctrl`
+  (structures bundle) plays the `curtain` clip (1.4583 s, bones `Curtain_*_Bn` under `House_Bn`) while the tikiman is set to the saved pose and plays
+  `TitleScreenEnter` (state 14, `tikiman_title_enter`, 4.5 s one-shot) -> `TitleScreenIdle` (state 12, `tikiman_title_idle_02` loop; `RandomHop` bool -> state 13 `tikiman_title_idle`).
+  Later shows (`+0xb3 == 1`): player trigger `TitleScreenEnterV2` (Idle -> TitleScreenIdle, 0.5 s blend), no hut animation. `TitleScreenExit` (Play) -> Idle.
+  The coroutine waits until the animator's STATE TAG hash == `TitleIdle` (states 11-14 all carry it), then restores the saved pose one frame later.
+* Saved pose: `m_tikimanLocator` is UNASSIGNED in the shipped title scene (no level3 MonoBehaviour references the locator Transform), so the code's fallback
+  `Vector3(0.715, 0, 1.9)` (consts @0xB7CFD0 / @0xB7CFD4) + identity rotation is used (replaces the old "1 m in front" stand-in; HubModel.TITLE_TIKIMAN_SPOT).
+* The hut is a SkinnedMeshRenderer (`home_001_comp_LOD0`) that the stage extractor skipped (it was invisible in the port): `tools/assets/extract_hub_hut.py`
+  exports GLB + clip to `public/assets/stages/3d_stage_000/hut/`; `src/view/hub/HubHut.ts` plays it (linear keys; Unity slopes are not exported).
+* Wiring: `titleFlow` emits `pjm2:titleIntro` with the title model's intro phase (jingle); `hubSession` starts hut + entrance then (held in the Wait pose before).
+* NOT done / unknown: `RandomHop` has no setter in the decompile (idle_02 loops only); the hub's 10 `ChibiRoot/chibi_01` objects are `PrefabLoader` placeholders
+  (prefab pid 848, external) with MiniDialog — the title/hub chibis are not spawned yet (the port has none in the hub); PlayerMotor root-motion in the entrance clip is not checked.

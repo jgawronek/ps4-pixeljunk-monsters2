@@ -28,6 +28,7 @@ import {
 import { BloomChain, BLOOM_APPLY_GLSL, type BloomParams } from './PostBloom';
 import { AoPass, type AoParams } from './StageAO';
 
+import { DepthOfFieldPass, dofUrlEnabled, type DofSettings } from './DepthOfField';
 export const WATER_LAYER = 1;
 
 /** Optional render extras (Unity PPSv1 bloom / ambient occlusion); null/undefined = off. */
@@ -89,6 +90,9 @@ export class WaterPass {
   private gradeOn: boolean;
   private readonly bloom: BloomChain | null;
   private readonly ao: AoPass | null;
+  private dof: DepthOfFieldPass | null = null;
+  private dofSettings: DofSettings | null = null;
+  private readonly dofAllowed = dofUrlEnabled(typeof window !== 'undefined' ? window.location.search : '');
 
   constructor(
     private readonly renderer: THREE.WebGLRenderer,
@@ -148,7 +152,10 @@ export class WaterPass {
 
   get active(): boolean { return this.meshes.length > 0 && this.material !== null; }
   /** Scene renders via the HDR target (water and/or grade). */
-  get usesTarget(): boolean { return this.active || this.gradeOn || !!this.bloom || !!this.ao; }
+  get usesTarget(): boolean { return this.active || this.gradeOn || !!this.bloom || !!this.ao || this.dofActive; }
+  /** Unity PPSv1 depth of field of the active camera's profile (null = disabled); `?dof=0` forces off. */
+  setDof(s: DofSettings | null): void { this.dofSettings = this.dofAllowed ? s : null; }
+  get dofActive(): boolean { return this.dofSettings !== null; }
   get extrasEnabled(): { bloom: boolean; ao: boolean } { return { bloom: !!this.bloom, ao: !!this.ao }; }
   /** Last AO buffer (probes). */
   get aoTexture(): THREE.Texture | null { return this.ao?.texture ?? null; }
@@ -188,10 +195,15 @@ export class WaterPass {
     r.render(this.scene, camera);
     r.setRenderTarget(null);
     if (this.ao) this.ao.endFrame(r, rt.depthTexture!, camera as THREE.PerspectiveCamera, w, h);
-    this.bloom?.run(r, rt.texture, w, h);
+    let sceneTex: THREE.Texture = rt.texture;
+    if (this.dofSettings !== null && camera instanceof THREE.PerspectiveCamera) {
+      this.dof ??= new DepthOfFieldPass();
+      sceneTex = this.dof.run(r, rt.texture, rt.depthTexture!, camera, this.dofSettings, w, h); // PPSv1 order: DoF before bloom / grade
+    }
+    this.bloom?.run(r, sceneTex, w, h);
 
     // 2. copy to the canvas
-    this.copyMat.uniforms.tColor.value = rt.texture;
+    this.copyMat.uniforms.tColor.value = sceneTex;
     this.copyMat.uniforms.tDepth.value = rt.depthTexture;
     r.render(this.copyScene, this.copyCam);
     if (!this.active) return;
@@ -224,5 +236,6 @@ export class WaterPass {
     this.gradeLut?.dispose();
     this.bloom?.dispose();
     this.ao?.dispose();
+    this.dof?.dispose();
   }
 }

@@ -35,6 +35,12 @@ export function screenToRef(sx: number, sy: number, vw: number, vh: number): { x
   return { x: (sx - o.x) / o.s, y: (sy - o.y) / o.s };
 }
 
+/** Full-bleed rectangle: covers the WHOLE window whatever its aspect (the 1920x1080 stage is only the middle band). For dimming washes
+ *  and click-catching backdrops. The parent must not clip (overflow visible). */
+export function bleed(el: HTMLElement): void {
+  Object.assign(el.style, { position: 'absolute', left: '-6000px', top: '-6000px', width: `${REF_W + 12000}px`, height: `${REF_H + 12000}px` });
+}
+
 export function css(el: HTMLElement, s: Partial<CSSStyleDeclaration>): void {
   Object.assign(el.style, s);
 }

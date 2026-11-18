@@ -156,6 +156,7 @@ export class TitleHost {
   }
 
   private sfx(name: string): void {
+    if (name === 'titlejingle') { (window as unknown as { __pjm2TitleIntro?: boolean }).__pjm2TitleIntro = true; window.dispatchEvent(new Event('pjm2:titleIntro')); } // hub: hut curtain + tikiman entrance
     const clip = SFX_FOR[name];
     if (clip !== undefined) void this.d.audio()?.play(clip);
   }

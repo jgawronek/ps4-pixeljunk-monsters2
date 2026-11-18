@@ -87,6 +87,9 @@ export class ChibiMotor {
   // --- serialized / public fields (Chibi.cs) ---
   destPos: V3;
   destYawDeg: number;
+  /** Stage-intro chibis only: once they stop (speed below the facing threshold) they turn to DestRot (PathRunner's EndFacingAngle) at the
+   *  same 180 deg/s - what the original intro shows (stop, rotate, then hop). The decompiled Chibi.UpdatePosition never reads DestRot. */
+  followDestRot = false;
   lastPos: V3;
   enableRunSound = true;
   isScared = false;
@@ -317,6 +320,8 @@ export class ChibiMotor {
         ? lookYaw(this.playerPos.x - this.pos.x, this.playerPos.z - this.pos.z)
         : lookYaw(this.vel.x, this.vel.z);
       this.yawDeg = rotateYawTowards(this.yawDeg, target, dt * C.TURN_DEG_PER_SEC);
+    } else if (this.followDestRot) {
+      this.yawDeg = rotateYawTowards(this.yawDeg, this.destYawDeg, dt * C.TURN_DEG_PER_SEC);
     }
   }
 

@@ -337,7 +337,7 @@ export class TowerLevelUi {
       css(b.gauge, { display: showGauge ? 'block' : 'none' });
       if (showGauge && b.clock !== null) {
         // size relative to the 1080p reference so the gauge keeps its proportion on any window
-        const k = Math.max(0.3, Math.min(1.2, window.innerHeight / 1080 * 0.7));
+        const k = Math.max(0.3, Math.min(1.2, window.innerWidth / 1920 * 0.7)); // canvas unit = width / 1920 (match width)
         const f = Math.min(1, Math.max(0, b.state.fill));
         css(b.clock.box, { display: 'block', transform: `scale(${k})`, margin: `${-(CLOCK_H * (1 - k)) / 2}px auto` });
         const deg = f * 360;

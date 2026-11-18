@@ -41,21 +41,27 @@ export class IntroCardUi {
     place(diff, 968, 610);
     this.hint = textEl(this.assets, 'Font_01', t.hint, { scale: 0.7, tracking: -6, tint: TEXT.dim.tint, outline: TEXT.dim.outline, px: 52 * 0.7 });
     place(this.hint, 960, 960);
-    for (const el of [area, stage, diff, this.hint]) this.layer.appendChild(el);
+    for (const el of [area, stage, diff]) this.layer.appendChild(el);
+    this.hint.remove?.();
+    this.root.bottom.appendChild(this.hint); // "Press Enter / click to start" hugs the bottom edge
   }
 
   setAlpha(a: number): void {
     this.layer.style.opacity = String(Math.max(0, Math.min(1, a)));
     this.layer.style.display = a <= 0 ? 'none' : 'block';
+    this.bandAlpha = Math.max(0, Math.min(1, a));
+    if (this.hint !== null) this.hint.style.display = a <= 0 ? 'none' : '';
   }
+  private bandAlpha = 1;
 
   /** Hint pulses only while the confirm lock-out has elapsed. */
   setHintReady(ready: boolean): void {
-    if (this.hint !== null) this.hint.style.opacity = ready ? '1' : '0.25';
+    if (this.hint !== null) this.hint.style.opacity = String((ready ? 1 : 0.25) * this.bandAlpha);
   }
 
   hide(): void {
     this.layer.replaceChildren();
+    this.hint?.remove(); // the hint lives in the UiRoot bottom band
     this.hint = null;
   }
 }

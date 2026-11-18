@@ -7,7 +7,7 @@
 // _03 "Got it!" @ (960,466): each 280x210 `dialogue_sel` bubble, label Font_01 colour (0.078) dark.
 
 import type { UiAssets } from './UiAssets';
-import { css, place, spriteEl, TEXT, textEl } from './UiDom';
+import { bleed, css, place, spriteEl, TEXT, textEl } from './UiDom';
 import type { StringLookup } from './WaveCalls';
 
 export type Align = 'left' | 'center' | 'right';
@@ -43,7 +43,8 @@ export function f2(assets: UiAssets, text: string, x: number, y: number, scale =
  *  Q4.BgMenuController dims the 3D scene behind full-screen menus (UIController.showBGMenu). */
 export function bgWash(): HTMLDivElement {
   const d = document.createElement('div');
-  css(d, { position: 'absolute', left: '0', top: '0', width: '1920px', height: '1080px', background: 'rgba(37,67,97,0.502)', pointerEvents: 'none' });
+  css(d, { background: 'rgba(37,67,97,0.502)', pointerEvents: 'none' });
+  bleed(d); // covers the whole window, not just the 16:9 stage
   return d;
 }
 

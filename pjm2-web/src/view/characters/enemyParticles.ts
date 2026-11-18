@@ -46,7 +46,7 @@ function softDot(): THREE.Texture | null {
 
 function rnd(a: number, b: number): number { return a + Math.random() * (b - a); }
 
-function sampleGradient(rec: EnemyEmitter, t: number): [number, number, number, number] {
+export function sampleGradient(rec: EnemyEmitter, t: number): [number, number, number, number] {
   const g = rec.colorOverLifetime;
   if (!g || !g.enabled) return [1, 1, 1, 1];
   const col = g.gradient.color;
@@ -69,7 +69,7 @@ function sampleGradient(rec: EnemyEmitter, t: number): [number, number, number, 
   return [c[0], c[1], c[2], a[0]];
 }
 
-function sampleSize(rec: EnemyEmitter, t: number): number {
+export function sampleSize(rec: EnemyEmitter, t: number): number {
   const s = rec.sizeOverLifetime;
   if (!s || !s.enabled || s.samples.length < 2) return 1;
   const pos = Math.min(1, Math.max(0, t)) * (s.samples.length - 1);

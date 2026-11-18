@@ -321,6 +321,32 @@ def material_info(idx, go_pid):
     return None
 
 
+def texture_sheet(um):
+    """TextureSheetAnimationModule (UVModule): tiles + frame-over-time curve (value 0..1 over the lifetime, x scalar)."""
+    if not um.get('enabled', False):
+        return None
+    fo = um.get('frameOverTime', {})
+    sc = fo.get('scalar', 1.0)
+    return {'enabled': True, 'tilesX': int(um.get('tilesX', 1)), 'tilesY': int(um.get('tilesY', 1)),
+            'animationType': int(um.get('animationType', 0)), 'rowIndex': int(um.get('rowIndex', 0)),
+            'cycles': r6(um.get('cycles', 1)), 'randomRow': bool(um.get('randomRow', False)),
+            'frameOverTime': minmax_curve(fo), 'frameScalar': r6(sc),
+            'startFrame': minmax_curve(um.get('startFrame', {}))}
+
+
+def velocity_over_lifetime(vm):
+    """VelocityModule: per-axis MinMaxCurve (8 samples), local/world space flag."""
+    if not vm.get('enabled', False):
+        return None
+    out = {'enabled': True, 'inWorldSpace': bool(vm.get('inWorldSpace', False))}
+    for ax in 'xyz':
+        mc = vm.get(ax, {})
+        rec = minmax_curve(mc)
+        rec['scalar'] = r6(mc.get('scalar', 1.0))
+        out[ax] = rec
+    return out
+
+
 def extract_record(idx, ps_reader, bundle_name, texture_files):
     tt = ps_reader.read_typetree()
     go_pid = ref_pid(tt.get('m_GameObject'))
@@ -342,6 +368,8 @@ def extract_record(idx, ps_reader, bundle_name, texture_files):
         'shape': shape_record(tt.get('ShapeModule', {})),
         'colorOverLifetime': color_over_lifetime(tt.get('ColorModule', {})),
         'sizeOverLifetime': size_over_lifetime(tt.get('SizeModule', {})),
+        'textureSheet': texture_sheet(tt.get('UVModule', {})),
+        'velocityOverLifetime': velocity_over_lifetime(tt.get('VelocityModule', {})),
     }
     rec['render'] = material_info(idx, go_pid)
     tex_reader, tex_name, note = main_texture(idx, go_pid)
