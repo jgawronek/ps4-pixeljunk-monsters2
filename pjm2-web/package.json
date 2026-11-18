@@ -1,0 +1,33 @@
+{
+  "name": "pjm2-web",
+  "version": "0.0.1",
+  "private": true,
+  "description": "PixelJunk Monsters 2 — TypeScript/WebGL port. Personal build from the owner's decrypted PS4 copy. Single-player only. Source-only project: game assets are extracted from the user's own copy by tools/, never redistributed.",
+  "type": "module",
+  "scripts": {
+    "test": "vitest run",
+    "test:watch": "vitest",
+    "typecheck": "tsc --noEmit",
+    "check": "tsc --noEmit && vitest run",
+    "dev": "vite",
+    "build": "vite build",
+    "build:packs": "tsx tools/assets/pack_assets.ts",
+    "build:all": "tsx tools/assets/pack_assets.ts && vite build",
+    "serve": "node tools/serve.mjs",
+    "sim:stage1": "tsx src/main/headless-stage1.ts"
+  },
+  "dependencies": {
+    "@dimforge/rapier3d-compat": "0.14.0",
+    "three": "0.169.0"
+  },
+  "devDependencies": {
+    "@types/node": "^22.20.5",
+    "@types/three": "0.169.0",
+    "playwright-core": "^1.65.1",
+    "sharp": "^0.35.5",
+    "tsx": "^4.19.0",
+    "typescript": "^5.6.0",
+    "vite": "^5.4.0",
+    "vitest": "^2.1.0"
+  }
+}

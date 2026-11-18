@@ -1,0 +1,36 @@
+# ---- NEVER publish: game files, keys, firmware, captures, personal files --------------------------------------
+/game/
+/hako-pjm2-*/
+/evidence/
+/ps3keys/
+/ps4_bios/
+/rpcs3/
+*.pkg
+*.rap
+*.har
+/Screenshot*.png
+/.claude/
+/.opencode/
+
+# ---- Derived from the game binaries / game data (not redistributed) ------------------------------------------
+/decomp/decompiled/
+/decomp/ghidra_proj/
+/decomp/il2cpp/
+/decomp/il2cpp_user/
+/decomp/skeleton/
+/decomp/data/
+
+# ---- Extracted / generated assets and tool scratch -----------------------------------------------------------
+pjm2-web/public/assets/
+pjm2-web/tools/assets/audio-out/
+pjm2-web/tools/assets/pylibs/
+pjm2-web/tools/assets/__pycache__/
+pjm2-web/tools/shaders/__pycache__/
+pjm2-web/tools/shaders/*.pkl
+pjm2-web/tools/shaders/*.bin
+**/__pycache__/
+pjm2-web/node_modules/
+pjm2-web/dist/
+pjm2-web/.work/
+*.tsbuildinfo
+*.log
