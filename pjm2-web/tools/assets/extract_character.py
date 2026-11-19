@@ -432,6 +432,7 @@ def export_glb(b: Bundle, nodes, smr_pid, out_path, generator):
     ibm_acc = w.add_accessor(ibm.tobytes(), len(bone_pids), 5126, 'MAT4')
     w.skins.append({'name': f'{mesh.m_Name}_skin', 'inverseBindMatrices': ibm_acc,
                     'joints': joint_nodes, 'skeleton': skel_root})
+    gl_nodes[mesh_node]['skin'] = 0  # bind the mesh node to the skin (without it three.js loads a plain Mesh and the bones deform nothing)
     w.nodes = gl_nodes
 
     data = w.finish([0], generator)

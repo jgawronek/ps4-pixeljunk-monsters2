@@ -83,6 +83,9 @@ export interface CameraFollowParams {
   zoomSmoothTime?: number;
   /** 0x48 — serialized (0,0,0). Added to the focus position pre-scaling. */
   globalOffset?: { x: number; y: number; z: number };
+  /** Default true = FAITHFUL: the focus position is multiplied by zoomRate (GetDesiredLookatTarget), which drags the view toward the world origin
+   *  (the hut) when zooming in.  The original never exposes it with min == max; the web wheel-zoom extension sets false so zoom stays centred on the player. */
+  focusScalesWithZoom?: boolean;
   /** 0x7C — serialized (7.8, 5); ctor default (5,5) via DAT_00b7b6b8=5. */
   parallelMoveRange?: { x: number; y: number };
   /** 0x84 — serialized 1000 (ctor 6). Pan-while-idle acceleration. */
@@ -119,6 +122,7 @@ export class CameraFollow {
   readonly zoomSpeed: number;
   readonly zoomSmoothTime: number;
   readonly globalOffset: { x: number; y: number; z: number };
+  private readonly focusScalesWithZoom: boolean;
   readonly parallelMoveRange: { x: number; y: number };
   readonly parallelMoveChaseAccer: number;
   readonly parallelMoveChaseSpeed: number;
@@ -168,6 +172,7 @@ export class CameraFollow {
     this.zoomSpeed = params.zoomSpeed ?? 2;
     this.zoomSmoothTime = params.zoomSmoothTime ?? 0.2;
     this.globalOffset = params.globalOffset ?? { x: 0, y: 0, z: 0 };
+    this.focusScalesWithZoom = params.focusScalesWithZoom ?? true;
     this.parallelMoveRange = params.parallelMoveRange ?? { x: 7.8, y: 5 };
     this.parallelMoveChaseAccer = params.parallelMoveChaseAccer ?? 1000;
     this.parallelMoveChaseSpeed = params.parallelMoveChaseSpeed ?? 10;
@@ -316,9 +321,10 @@ export class CameraFollow {
     // the focus toward the world origin when zooming "in"); with the
     // serialized min == max == 30 this is the ONLY effect of zoom besides
     // the follow-smoothTime scaling below.
-    const dx = f32(f32(f32(pos.x + this.m_currentParallelDelta.x) + go.x) * rate);
-    const dy = f32(f32(pos.y + go.y) * rate);
-    const dz = f32(f32(f32(pos.z + this.m_currentParallelDelta.z) + go.z) * rate);
+    const fs = this.focusScalesWithZoom ? rate : 1;
+    const dx = f32(f32(f32(pos.x + this.m_currentParallelDelta.x) + go.x) * fs);
+    const dy = f32(f32(pos.y + go.y) * fs);
+    const dz = f32(f32(f32(pos.z + this.m_currentParallelDelta.z) + go.z) * fs);
     // smoothTime = Max(zoomRate, 0.1) * cameraFollowSmoothTime (DAT_00b7b6d0=0.1)
     const st = f32(f32(Math.max(rate, 0.1)) * this.cameraFollowSmoothTime);
     this.smoothDampTo(dx, dy, dz, st, dt);
@@ -341,7 +347,7 @@ export class CameraFollow {
     this.m_previousRotateAxis.y = 0;
     this.m_lookAtPosSmoothVel.set(0, 0, 0);
     if (pos !== undefined) {
-      const rate = this.m_currentZoomRate;
+      const rate = this.focusScalesWithZoom ? this.m_currentZoomRate : 1;
       this.target.set(f32(pos.x * rate), f32(pos.y * rate), f32(pos.z * rate));
     }
   }

@@ -24,6 +24,8 @@ export interface TitleBootCtx {
   isStarted?: () => boolean;
   /** The old loading overlay (#loading): kept as a transparent click-through shell. */
   loadingEl: HTMLElement;
+  /** The real loading screen is up / fading: hold the title intro until it is gone. */
+  isBlocked?: () => boolean;
 }
 
 export const titleDisabled = (): boolean => new URLSearchParams(window.location.search).has('notitle');
@@ -75,6 +77,7 @@ export async function bootTitle(ctx: TitleBootCtx): Promise<TitleHost | null> {
     titleUi,
     save: ctx.save,
     flow,
+    isBlocked: ctx.isBlocked,
     audio: ctx.getAudio,
     ensureAudio: () => {
       const a = ctx.makeAudio();

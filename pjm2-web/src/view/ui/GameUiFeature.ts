@@ -80,6 +80,8 @@ export class GameUiFeature {
   private bonusValue: number | null = null;
   private pendingResult: { t: number; data: ResultsData } | null = null;
   private lastCountdown = 0;
+  /** True while the 3-2-1 pre-wave countdown is showing (until the first wave activates). */
+  get countdownActive(): boolean { return this.lastCountdown > 0; }
 
   constructor(private readonly deps: GameUiDeps) {
     const S = (k: string, f: string): string => t(deps.strings(), k, f);

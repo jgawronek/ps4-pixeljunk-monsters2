@@ -907,7 +907,9 @@ describe('TreeView shipped assets: per-variant UV0 diversity (extractor audit)',
       }
     }
     const manifest = JSON.parse(readFileSync(join(TREES_DIR, 'manifest.json'), 'utf8'));
-    for (const e of manifest.variants) expect(e.windWeight.attribute).toBe('_WINDWEIGHT');
+    for (const e of manifest.variants) {
+      if (e.species === 'tree_001' || e.species === 'tree_002') expect(e.windWeight.attribute).toBe('_WINDWEIGHT'); // hub-only species (006/007/008/010) are static
+    }
   });
 
   (haveAssets ? it : it.skip)('manifest groups both species and records the UV0 audit', () => {

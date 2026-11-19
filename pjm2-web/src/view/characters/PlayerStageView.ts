@@ -31,6 +31,8 @@ export class PlayerStageView {
   private currentAction: THREE.AnimationAction | null = null;
   private moving = false;
   private dance: { remaining: number; phase: DancePhase } | null = null;
+  /** Jump / hip-attack clip owning the mixer until the landing (tikiman_ctrl IdleToJump / Prepare / Pound / BounceSuccess ...). */
+  private airClip: string | null = null;
 
   /** Mask + shell (carapace) cosmetics (Q4.PlayerAvatarDecorator). */
   readonly decorator: PlayerAvatarDecorator;
@@ -78,7 +80,34 @@ export class PlayerStageView {
       this.dance = null;
     }
     if (this.dance !== null) return; // dance owns the mixer until it ends
+    if (this.airClip !== null) return; // jump / hip attack clip owns the mixer until the landing
     this.play(moving ? RUN_CLIP : IDLE_CLIP);
+  }
+
+  /** tikiman_ctrl trigger IdleJump / RunningJump (TikimanStateJump.Enter): IdleToJump | RunToJumpL (the run clips alternate feet), held on its last frame. */
+  playJump(running: boolean): void {
+    this.dance = null;
+    this.playAir(running ? 'tikiman_runtojump_right' : 'tikiman_idleToJump');
+  }
+  /** Trigger HipAttack (TikimanStateAttack.Enter): Prepare state = tikiman_attack_carapace. */
+  playHipAttack(): void { this.playAir('tikiman_attack_carapace'); }
+  /** Trigger HipAttackPound (after HipAttackDelayDur): Pound state = tikiman_attack_carapace again. */
+  playHipPound(): void { this.playAir('tikiman_attack_carapace'); }
+  /** Trigger HipAttackBounceSuccess (TikimanStateAttackBounce.Enter): BounceSuccess state = tikiman_attack_impactAir. */
+  playHipBounce(): void { this.playAir('tikiman_attack_impactAir'); }
+  /** Landed: after a hip attack BounceIdleLand = tikiman_attack_impactLand (then idle); after a plain jump straight back to locomotion. */
+  endAir(fromBounce: boolean): void {
+    this.airClip = null;
+    if (!fromBounce || !this.rig.clips.some((c) => c.name === 'tikiman_attack_impactLand')) { this.resumeLocomotion(); return; }
+    this.setOneShot('tikiman_attack_impactLand');
+  }
+  /** True while a jump / hip-attack clip owns the mixer. */
+  get inAir(): boolean { return this.airClip !== null; }
+
+  private playAir(name: string): void {
+    if (!this.rig.clips.some((c) => c.name === name)) return;
+    this.airClip = name;
+    this.playOnce(name);
   }
 
   /** PJM2 build-dance: the tikiman dances next to a tower while it builds.
@@ -137,7 +166,7 @@ export class PlayerStageView {
 
   /** Title screen (tikiman_ctrl states 11/14/12): first show = TitleScreenEnter (tikiman_title_enter, 4.5 s, one-shot) -> TitleScreenIdle
    *  (tikiman_title_idle_02 loop, exit time 0.95 / 0 s blend); later shows = trigger TitleScreenEnterV2: Idle -> TitleScreenIdle in 0.5 s. */
-  startTitle(firstTime: boolean): void {
+  startTitle(firstTime: boolean, onEnterDone?: () => void): void {
     this.dance = null;
     this.moving = false;
     const idle = (fade: number): void => {
@@ -151,13 +180,14 @@ export class PlayerStageView {
       this.currentAction = action;
     };
     const enter = this.rig.clips.find((c) => c.name === 'tikiman_title_enter');
-    if (!firstTime || !enter) { idle(0.5); return; }
+    if (!firstTime || !enter) { idle(0.5); onEnterDone?.(); return; }
     this.playOnce('tikiman_title_enter');
     const action = this.currentAction;
     const onDone = (e: { action: THREE.AnimationAction }): void => {
       if (e.action !== action) return;
       this.mixer.removeEventListener('finished', onDone);
       idle(0);
+      onEnterDone?.(); // TitleScreenController.StartIntroAnimation case 6: the player animator reached TitleIdle -> the title UI may start
     };
     this.mixer.addEventListener('finished', onDone);
   }

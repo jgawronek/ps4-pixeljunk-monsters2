@@ -9,7 +9,7 @@
 // UiAssets + string table, flow state machine glue, title / options / credits (TitleHost), stage select
 // (StageSelectFeature), loading overlay, dev panels, the rAF loop, window.__pjm2 (-> current session).
 //
-// URL flags (unchanged meaning): ?stage=N ?diff=D ?notitle ?nointro ?nograde ?noui ?nopacks ?eagertowers ?lite.
+// URL flags (unchanged meaning): ?stage=N ?diff=D ?notitle ?nointro ?nograde ?noui ?nopacks ?lazytex ?lazytowers ?lite.
 
 import * as THREE from 'three';
 
@@ -102,7 +102,8 @@ const initialDifficulty = difficultyFromSearch(window.location.search) as 0 | 1 
 
 /** Original loading screen (Q4.LoadingScreen: background + tips); created lazily once the UI assets are available. */
 let loadingUi: LoadingScreenUi | null = null;
-void uiAssetsLoad.then((a) => { loadingUi = new LoadingScreenUi(a, (k, f) => (stringTable[k] !== undefined && stringTable[k] !== '' ? stringTable[k] : f)); }).catch(() => { /* plain overlay */ });
+let bootLoading = true; // the first load (hub + title assets) also shows the original loading screen instead of the bare black bar
+void uiAssetsLoad.then((a) => { loadingUi = new LoadingScreenUi(a, (k, f) => (stringTable[k] !== undefined && stringTable[k] !== '' ? stringTable[k] : f)); if (bootLoading) showLoading(loadingText.textContent ?? 'loading …'); }).catch(() => { /* plain overlay */ });
 /** Dev progress overlay shown over the picture: bar + text hugging the bottom edge, no opaque backdrop. */
 function styleLoadingOverImage(on: boolean): void {
   loading.style.background = on ? 'transparent' : '#0a0e12';
@@ -349,9 +350,18 @@ async function boot(): Promise<void> {
       getAudio: () => audio,
       makeAudio: () => services.ensureAudio(),
       loadingEl: loading,
+      isBlocked: () => {
+        const loadingUp = bootLoading || (loadingUi?.active ?? false);
+        // Loading screen gone -> the hub's first-show intro starts (closeup -> camera switch -> hut + tikiman entrance); the title UI (logo, jingle)
+        // waits for it (TitleScreenController.StartIntroAnimation waits for the player's TitleIdle).
+        if (!loadingUp) hub?.beginIntro();
+        return loadingUp || (hub !== null && !hub.disposed && hub.introPending);
+      },
     });
     if (booted === null) startButton.style.display = 'block';
   } else startButton.style.display = 'block';
+  bootLoading = false;
+  hideLoading(); // first load done: the loading screen fades out, then the title intro starts (isBlocked)
 }
 
 // Legacy START button (?notitle / title UI unavailable; probes click it programmatically).

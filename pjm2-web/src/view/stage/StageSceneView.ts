@@ -276,6 +276,25 @@ export class StageSceneView {
   readonly group = new THREE.Group();
   /** Node hierarchy (semantics/logic only — batched draws do NOT live here). */
   readonly hierarchy = new THREE.Group();
+  /** Authored world matrix of a node (Unity LH TRS chain) conjugated by the x-mirror, i.e. in the port's right-handed space. */
+  private mirroredNodeWorld(scene: SceneFile, nodeIndex: number): THREE.Matrix4 {
+    const m = new THREE.Matrix4();
+    const local = new THREE.Matrix4();
+    const q = new THREE.Quaternion();
+    const p = new THREE.Vector3();
+    const sc = new THREE.Vector3();
+    const chain: SceneNode[] = [];
+    for (let i = nodeIndex; i >= 0; i = scene.nodes[i].parent) chain.push(scene.nodes[i]);
+    for (let k = chain.length - 1; k >= 0; k--) {
+      const n = chain[k];
+      p.set(-n.pos[0], n.pos[1], n.pos[2]);
+      q.set(n.rot[0], -n.rot[1], -n.rot[2], n.rot[3]);
+      sc.set(n.scale[0], n.scale[1], n.scale[2]);
+      m.multiply(local.compose(p, q, sc));
+    }
+    return m;
+  }
+
   /** Root-level group holding the world-space-batched draw meshes. */
   readonly draws = new THREE.Group();
   /** Terrain chunk meshes for GroundPicker raycasts (three-space, mirrored). */
@@ -384,12 +403,13 @@ export class StageSceneView {
     // geometry lives natively in three.js right-handed space.
     progress.phase = 'geometry';
     report('building geometry');
-    interface Slice { meshId: string; submeshIndex: number; materialId: string; node: SceneNode; castShadows: boolean; receiveShadows: boolean }
+    interface Slice { meshId: string; submeshIndex: number; materialId: string; node: SceneNode; worldSpace: boolean; castShadows: boolean; receiveShadows: boolean }
     const slices: Slice[] = jobs.map(({ node, render }) => ({
       meshId: render.mesh,
       submeshIndex: render.worldSpace && render.subMesh ? render.subMesh.first : 0,
       materialId: render.materials[0],
       node,
+      worldSpace: render.worldSpace,
       castShadows: render.castShadows === 1,
       receiveShadows: render.receiveShadows === 1,
     }));
@@ -496,6 +516,9 @@ export class StageSceneView {
         mesh.castShadow = s.castShadows;
         mesh.receiveShadow = s.receiveShadows;
         mesh.matrixAutoUpdate = false;
+        // Renderers that are NOT static-batched (worldSpace=false; 118 in the hub scene: decos, ranking board, rainbow arches, ...) keep their
+        // mesh in local space and are placed by the node's world TRS. (Stages bake everything, so this never triggered there.)
+        if (!s.worldSpace) { mesh.matrix.copy(this.mirroredNodeWorld(scene, s.node.i)); mesh.matrixWorldNeedsUpdate = true; }
         mesh.userData.nodeIndex = s.node.i;
         this.draws.add(mesh);
         this.disposables.push(g);

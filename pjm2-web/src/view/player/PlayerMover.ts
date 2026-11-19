@@ -102,6 +102,12 @@ export interface MoverOptions {
   holdingFruit?: boolean;
   /** Motor CanMove() false (animator states / slide) -> zero target velocity. */
   canMove?: boolean;
+  /** TikimanStateMachine.OverrideGravity (hip attack hover 0 / dive 80, jump boost 20): replaces m_JumpGravity while airborne. */
+  gravity?: number;
+  /** TikimanStateMachine.OverrideVel: 'all' = velocity forced to zero (no gravity), 'horizontal' = (0, vy, 0). */
+  freeze?: 'none' | 'all' | 'horizontal';
+  /** PlayerMotor external displacement (+0x88): extra CharacterController.Move offset, applied once per update() call. */
+  external?: { x: number; y: number; z: number } | null;
 }
 
 export interface MoveResult {
@@ -176,6 +182,8 @@ export class PlayerMover {
   vz = 0;
   /** cc.isGrounded after the last Move (CollisionFlags.Below). */
   groundedCC = false;
+  /** CharacterController.collisionFlags != None during the last update() (hip attack ends on any controller hit). */
+  contact = false;
   /** Q4 "new collisions" grounded (OnControllerColliderHit classification). */
   grounded = false;
   /** m_facingSlopeAngle (deg, + = uphill along facing). */
@@ -196,6 +204,7 @@ export class PlayerMover {
   private readonly waterCapsule: RAPIER.Capsule;
   private readonly queries: PhysicsQueries;
   private acc = 0;
+  private pendingExternal: { x: number; y: number; z: number } | null = null;
   private modeTime = 0;
   private respawnFrom: V3 = [0, 0, 0];
   private respawnTo: V3 = [0, 0, 0];
@@ -254,10 +263,18 @@ export class PlayerMover {
    */
   update(dt: number, input: PlayerInput, opts: MoverOptions = {}): void {
     this.acc += Math.min(dt, 0.25);
+    this.contact = false;
+    this.pendingExternal = opts.external ?? null; // consumed by the first fixed step (UpdateMotor zeroes +0x88 after the movement)
     while (this.acc >= FIXED_THRESHOLD) {
       this.step(FIXED_STEP, input, opts);
       this.acc -= FIXED_STEP;
     }
+    this.pendingExternal = null;
+  }
+
+  /** Physics.Linecast(pos + up*dyUp, pos - down*dyDown, TerrainMask) hit? (UpdateAttackTarget's min-start-height probe) */
+  groundWithin(dyUp: number, dyDown: number): boolean {
+    return this.queries.linecast(this.x, this.y + dyUp, this.z, this.x, this.y - dyDown, this.z, this.pw.terrainMask) !== null;
   }
 
   private step(h: number, input: PlayerInput, opts: MoverOptions): void {
@@ -289,22 +306,33 @@ export class PlayerMover {
     } else {
       accel = s.deceleration; // CanMove()==false path uses 0x30 as well
     }
-    // Vector3.MoveTowards(current, target(y kept), accel*dt) — only xz changes.
-    const dx = tx - this.vx, dz = tz - this.vz;
-    const dl = Math.sqrt(dx * dx + dz * dz);
-    const maxD = accel * h;
-    if (dl <= maxD || dl < 1e-9) { this.vx = tx; this.vz = tz; }
-    else { this.vx += (dx / dl) * maxD; this.vz += (dz / dl) * maxD; }
+    const freeze = opts.freeze ?? 'none';
+    if (freeze !== 'none') {
+      // IsOverrideVel (hip attack): horizontal velocity forced to zero; 'all' also zeroes vy
+      this.vx = 0; this.vz = 0;
+      if (freeze === 'all') this.vy = 0;
+    } else {
+      // Vector3.MoveTowards(current, target(y kept), accel*dt) — only xz changes.
+      const dx = tx - this.vx, dz = tz - this.vz;
+      const dl = Math.sqrt(dx * dx + dz * dz);
+      const maxD = accel * h;
+      if (dl <= maxD || dl < 1e-9) { this.vx = tx; this.vz = tz; }
+      else { this.vx += (dx / dl) * maxD; this.vz += (dz / dl) * maxD; }
+    }
 
-    // ApplyGravity (@0x3F60B0): grounded -> vy = max(vy, -1); else vy -= jumpGravity*dt
-    if (this.groundedCC) this.vy = Math.max(this.vy, GROUNDED_MIN_VY);
-    else this.vy -= s.jumpGravity * h;
+    // ApplyGravity (@0x3F60B0): grounded -> vy = max(vy, -1); else vy -= (OverrideGravity | jumpGravity)*dt
+    if (freeze === 'all') { /* hover: OverrideGravity 0 */ }
+    else if (this.groundedCC) this.vy = Math.max(this.vy, GROUNDED_MIN_VY);
+    else this.vy -= (opts.gravity ?? s.jumpGravity) * h;
 
     // Port deviation (documented): a character that was standing keeps glued to the
     // ground while descending slopes/steps (down pass reaches stepOffset further);
     // plain PhysX CCT flickers airborne on slopes steeper than ~skin per step.
-    const res = this.move(this.vx * h, this.vy * h, this.vz * h, this.groundedCC && this.vy <= 0 ? PLAYER_CC.stepOffset : 0);
+    const ext = this.pendingExternal;
+    this.pendingExternal = null;
+    const res = this.move(this.vx * h + (ext?.x ?? 0), this.vy * h + (ext?.y ?? 0), this.vz * h + (ext?.z ?? 0), this.groundedCC && this.vy <= 0 ? PLAYER_CC.stepOffset : 0);
     this.groundedCC = res.below;
+    if (res.below || res.sides || res.above) this.contact = true;
 
     this.updateGroundDetection();
     if (this.grounded && this.mode === 'normal') this.lastGround = [this.x, this.y, this.z];

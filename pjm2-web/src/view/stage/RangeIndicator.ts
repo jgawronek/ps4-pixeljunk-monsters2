@@ -69,6 +69,12 @@
 
 import * as THREE from 'three';
 
+/** Receives a ground-projected decal instead of drawing meshes (WaterPass.setRangeDecal). Three.js world space, linear colour. */
+export interface DecalSink {
+  setRangeDecal(id: string, d: { x: number; y: number; z: number; radius: number; color: [number, number, number]; alpha: number } | null): void;
+}
+let nextDecalId = 0;
+
 export interface RangeIndicatorOptions {
   /** Ring/fill color. Default: Unity yellow (StructureRangeEffect default). */
   color?: THREE.ColorRepresentation;
@@ -211,6 +217,9 @@ export class RangeIndicator {
   private readonly discMesh: THREE.Mesh;
   private time = 0;
   private disposed = false;
+  private sink: DecalSink | null = null;
+  private decalShown = false;
+  private readonly decalId = `range-${nextDecalId++}`;
 
   constructor(root: THREE.Object3D, opts: RangeIndicatorOptions = {}) {
     this.root = root;
@@ -231,6 +240,7 @@ export class RangeIndicator {
       transparent: true,
       opacity: this.baseOpacity,
       depthWrite: false,
+      depthTest: false, // always drawn over the terrain: the draped heights come from the physics mesh, which can sit under the visible terrain
       polygonOffset: true,
       polygonOffsetFactor: -2,
       polygonOffsetUnits: -2,
@@ -241,6 +251,7 @@ export class RangeIndicator {
       transparent: true,
       opacity: this.baseOpacity * DISC_OPACITY_RATE,
       depthWrite: false,
+      depthTest: false,
       side: THREE.DoubleSide,
     });
 
@@ -252,6 +263,7 @@ export class RangeIndicator {
     this.group = new THREE.Group();
     this.group.name = 'RangeIndicator';
     this.group.visible = false;
+    disc.renderOrder = 20; ring.renderOrder = 21; // after the opaque scene and other transparents
     this.group.add(disc, ring);
     root.add(this.group);
   }
@@ -267,6 +279,14 @@ export class RangeIndicator {
     }
     this.radius = radius;
     this.time = 0;
+    if (this.sink !== null) {
+      // Projected onto the visible scenery by the post pass (depth-buffer decal): follows terrain, props and slopes, occluded by whatever is in front.
+      const c = this.ringMat.color;
+      this.sink.setRangeDecal(this.decalId, { x: -unityPos.x, y: unityPos.y, z: unityPos.z, radius, color: [c.r, c.g, c.b], alpha: this.baseOpacity });
+      this.group.visible = false;
+      this.decalShown = true;
+      return;
+    }
     if (this.heightAt !== null) {
       this.showConformed(unityPos, radius, this.heightAt);
     } else {
@@ -278,6 +298,9 @@ export class RangeIndicator {
     this.discMat.opacity = this.baseOpacity * DISC_OPACITY_RATE;
     this.group.visible = true;
   }
+
+  /** Draw as a depth-projected decal through `sink` instead of meshes (null = meshes). */
+  setDecalSink(sink: DecalSink | null): void { if (sink === null) this.hide(); this.sink = sink; }
 
   /** Drape the ring/fill over the terrain (projected look) instead of a flat
    *  plane. Pass null to go back to the flat unit geometry. */
@@ -322,6 +345,7 @@ export class RangeIndicator {
    *  @0x536d80); the port skips the cosmetic shrink-out. */
   hide(): void {
     this.group.visible = false;
+    if (this.decalShown) { this.sink?.setRangeDecal(this.decalId, null); this.decalShown = false; }
   }
 
   /** Advance the optional pulse (time-based, no RNG). No-op when hidden,
@@ -341,6 +365,7 @@ export class RangeIndicator {
     if (this.disposed) return;
     this.disposed = true;
     this.group.visible = false;
+    if (this.decalShown) this.sink?.setRangeDecal(this.decalId, null);
     this.root.remove(this.group);
     if (this.conformed) { this.ringMesh.geometry.dispose(); this.discMesh.geometry.dispose(); }
     this.ringGeo.dispose();
@@ -350,6 +375,6 @@ export class RangeIndicator {
   }
 
   get visible(): boolean {
-    return !this.disposed && this.group.visible;
+    return !this.disposed && (this.group.visible || this.decalShown);
   }
 }

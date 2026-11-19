@@ -293,7 +293,10 @@ export class OriginalHud {
         const b = wb.bars[i];
         const el = this.bars[i];
         if (b === undefined || !b.visible || b.posBar <= 0) { el.style.display = 'none'; continue; }
-        const w = Math.max(35, WAVE_BAR.barWidth * b.posBar); // 20 + 15 px caps minimum
+        // The fill image has pivot x = 1 (right edge fixed at the spawn end, prefab Loc_Meter_Bar/Image: anchored x 438, pivot (1, .5), size 444x30) and the
+        // monster walks from there towards home, so the fill is the distance TRAVELLED (it trails the monster): width = 444 * (1 - progress).
+        // (posBar is the icon progress, 1 = still at the spawn end, so using it directly made the bar shrink as the monster advanced.)
+        const w = Math.max(35, WAVE_BAR.barWidth * (1 - b.posBar)); // 20 + 15 px caps minimum
         // Loc_Meter_Bar (-119, +25) vs Monster_Offset (-160, +45): right edge = icon origin + 41 + 438, centre y = icon y + 20
         el.style.display = 'block';
         el.style.width = `${w}px`;

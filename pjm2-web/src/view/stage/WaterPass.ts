@@ -32,6 +32,15 @@ import { DepthOfFieldPass, dofUrlEnabled, type DofSettings } from './DepthOfFiel
 export const WATER_LAYER = 1;
 
 /** Optional render extras (Unity PPSv1 bloom / ambient occlusion); null/undefined = off. */
+/** A camera's PostProcessing profile as far as the pass cares (grade LUT + vignette, bloom). */
+export interface PostProfile { grade: GradeProfile; bloom: BloomParams | null }
+
+/** A ground-projected disc/ring (tower range): painted in the copy pass onto whatever the depth buffer shows (terrain, props, slopes). Three.js world space. */
+export interface RangeDecal { x: number; y: number; z: number; radius: number; color: [number, number, number]; alpha: number }
+export const MAX_RANGE_DECALS = 4;
+/** Vertical reach of the projection volume around the decal centre (world units). */
+const DECAL_HALF_HEIGHT = 4;
+
 export interface PassExtras { bloom?: BloomParams | null; ao?: AoParams | null }
 
 const COPY_VERTEX = /* glsl */ `
@@ -44,6 +53,10 @@ uniform sampler2D tColor;
 uniform sampler2D tDepth;
 uniform vec3 uClear; // LINEAR camera clear colour for far-plane pixels
 uniform float uGradeOn;
+uniform mat4 uInvVP;
+uniform int uDecalN;
+uniform vec4 uDecalPos[${MAX_RANGE_DECALS}]; // xyz centre, w radius
+uniform vec4 uDecalCol[${MAX_RANGE_DECALS}]; // rgb linear, a edge opacity
 varying vec2 vUv;
 #ifdef PJM_BLOOM
 ${BLOOM_APPLY_GLSL}
@@ -53,8 +66,22 @@ void main() {
 	float d = texture2D( tDepth, vUv ).r;
 	gl_FragDepth = d;
 	vec3 c = ( d >= 0.999999 ) ? uClear : texture2D( tColor, vUv ).rgb;
+	if ( uDecalN > 0 && d < 0.999999 ) {
+		vec4 wp = uInvVP * vec4( vUv * 2.0 - 1.0, d * 2.0 - 1.0, 1.0 );
+		vec3 w = wp.xyz / wp.w;
+		for ( int i = 0; i < ${MAX_RANGE_DECALS}; i ++ ) {
+			if ( i >= uDecalN ) break;
+			vec3 dp = w - uDecalPos[ i ].xyz;
+			float R = uDecalPos[ i ].w;
+			float r = length( dp.xz );
+			if ( r < R && abs( dp.y ) < ${DECAL_HALF_HEIGHT.toFixed(1)} ) {
+				float edge = smoothstep( R * 0.95, R * 0.965, r );
+				c = mix( c, uDecalCol[ i ].rgb, mix( uDecalCol[ i ].a * 0.25, uDecalCol[ i ].a, edge ) );
+			}
+		}
+	}
 	#ifdef PJM_BLOOM
-	if ( d < 0.999999 ) c += bloomColor( vUv );
+	c += bloomColor( vUv ); // PPSv1 bloom also lights the sky (the far-plane pixels hold the flat clear colour in the bloom source)
 	#endif
 	gl_FragColor = vec4( uGradeOn > 0.5 ? postGrade( c, vUv ) : c, 1.0 );
 	#include <tonemapping_fragment>
@@ -88,7 +115,12 @@ export class WaterPass {
   private readonly gradeRes = { value: new THREE.Vector2(1, 1) };
   private gradeLut: THREE.DataTexture | null = null;
   private gradeOn: boolean;
-  private readonly bloom: BloomChain | null;
+  private bloom: BloomChain | null;
+  private bloomOn: boolean;
+  private readonly extrasBloomBase: boolean;
+  private readonly baseGrade: GradeProfile;
+  private readonly gradeLuts = new Map<GradeProfile, THREE.DataTexture>();
+  private activeProfile: PostProfile | null = null;
   private readonly ao: AoPass | null;
   private dof: DepthOfFieldPass | null = null;
   private dofSettings: DofSettings | null = null;
@@ -105,12 +137,16 @@ export class WaterPass {
     extras: PassExtras = {},
   ) {
     this.bloom = extras.bloom ? new BloomChain(extras.bloom) : null;
+    this.bloomOn = this.bloom !== null;
+    this.extrasBloomBase = this.bloom !== null;
+    this.baseGrade = typeof grade === 'object' ? grade : STAGE1_GRADE_PROFILE;
     this.ao = extras.ao ? new AoPass(extras.ao) : null;
     this.clear.set(clearHex); // → working (linear) space
     this.gradeOn = grade !== false;
     this.grade = makeGradeUniforms(typeof grade === 'object' ? grade : STAGE1_GRADE_PROFILE);
     if (this.gradeOn) {
-      this.gradeLut = makeGradeLutTexture(bakeGradeLut(typeof grade === 'object' ? grade : STAGE1_GRADE_PROFILE));
+      this.gradeLut = makeGradeLutTexture(bakeGradeLut(this.baseGrade));
+      this.gradeLuts.set(this.baseGrade, this.gradeLut);
       this.grade.uGradeLut.value = this.gradeLut;
     }
     this.copyMat = new THREE.ShaderMaterial({
@@ -121,6 +157,10 @@ export class WaterPass {
         tDepth: { value: null },
         uClear: { value: new THREE.Vector3(this.clear.r, this.clear.g, this.clear.b) },
         uGradeOn: { value: this.gradeOn ? 1 : 0 },
+        uInvVP: { value: new THREE.Matrix4() },
+        uDecalN: { value: 0 },
+        uDecalPos: { value: Array.from({ length: MAX_RANGE_DECALS }, () => new THREE.Vector4()) },
+        uDecalCol: { value: Array.from({ length: MAX_RANGE_DECALS }, () => new THREE.Vector4()) },
         ...this.grade,
         ...(this.bloom ? this.bloom.applyUniforms : {}),
       },
@@ -150,13 +190,52 @@ export class WaterPass {
     }
   }
 
+  /**
+   * Switch the post profile at runtime (camera -> PostProcessingBehaviour.profile): grade (LUT + vignette) and bloom.  null = the construction
+   * profile.  The LUT of each profile is baked once (~30 ms) and kept.  Only meaningful when the grade is on.
+   */
+  setPostProfile(p: PostProfile | null): void {
+    if (p === this.activeProfile || !this.gradeOn) return;
+    this.activeProfile = p;
+    const g = p?.grade ?? this.baseGrade;
+    let lut = this.gradeLuts.get(g);
+    if (lut === undefined) { lut = makeGradeLutTexture(bakeGradeLut(g)); this.gradeLuts.set(g, lut); }
+    this.grade.uGradeLut.value = lut;
+    const fresh = makeGradeUniforms(g);
+    this.grade.uGradeA.value.copy(fresh.uGradeA.value);
+    this.grade.uGradeB.value.x = fresh.uGradeB.value.x; this.grade.uGradeB.value.y = fresh.uGradeB.value.y; this.grade.uGradeB.value.z = fresh.uGradeB.value.z;
+    this.grade.uGradeVigColor.value.copy(fresh.uGradeVigColor.value);
+    const b = p?.bloom ?? null;
+    if (b !== null) {
+      if (this.bloom === null) {
+        this.bloom = new BloomChain(b);
+        Object.assign(this.copyMat.uniforms, this.bloom.applyUniforms);
+        this.copyMat.defines = { ...this.copyMat.defines, PJM_BLOOM: '' };
+        this.copyMat.needsUpdate = true;
+      } else this.bloom.setParams(b);
+      this.bloomOn = true;
+    } else if (this.bloom !== null && !this.extrasBloomBase) {
+      this.bloomOn = false;
+      this.bloom.applyUniforms.uBloom.value.set(0, 0, 0); // PJM_BLOOM stays compiled in; zero intensity = off
+    }
+  }
+
+  /** Probe: which post profile is live. */
+  get postState(): { profile: boolean; bloomOn: boolean; gradeOn: boolean; dof: boolean } { return { profile: this.activeProfile !== null, bloomOn: this.bloomOn, gradeOn: this.gradeOn, dof: this.dofActive }; }
+
+  private readonly decals = new Map<string, RangeDecal>();
+  /** Show (or with null remove) a ground-projected range decal; implements RangeIndicator's DecalSink. */
+  setRangeDecal(id: string, d: RangeDecal | null): void {
+    if (d === null) this.decals.delete(id); else this.decals.set(id, d);
+  }
+
   get active(): boolean { return this.meshes.length > 0 && this.material !== null; }
   /** Scene renders via the HDR target (water and/or grade). */
-  get usesTarget(): boolean { return this.active || this.gradeOn || !!this.bloom || !!this.ao || this.dofActive; }
+  get usesTarget(): boolean { return this.decals.size > 0 || this.active || this.gradeOn || this.bloomOn || !!this.ao || this.dofActive; }
   /** Unity PPSv1 depth of field of the active camera's profile (null = disabled); `?dof=0` forces off. */
   setDof(s: DofSettings | null): void { this.dofSettings = this.dofAllowed ? s : null; }
   get dofActive(): boolean { return this.dofSettings !== null; }
-  get extrasEnabled(): { bloom: boolean; ao: boolean } { return { bloom: !!this.bloom, ao: !!this.ao }; }
+  get extrasEnabled(): { bloom: boolean; ao: boolean } { return { bloom: this.bloomOn, ao: !!this.ao }; }
   /** Last AO buffer (probes). */
   get aoTexture(): THREE.Texture | null { return this.ao?.texture ?? null; }
   get gradeEnabled(): boolean { return this.gradeOn; }
@@ -188,6 +267,19 @@ export class WaterPass {
     const rt = this.ensureTarget(w, h);
     this.gradeRes.value.set(w, h);
     this.grade.uGradeB.value.w = w / h;
+    {
+      const u = this.copyMat.uniforms;
+      camera.updateMatrixWorld();
+      (u.uInvVP.value as THREE.Matrix4).multiplyMatrices(camera.projectionMatrix, camera.matrixWorldInverse).invert();
+      let n = 0;
+      for (const d of this.decals.values()) {
+        if (n >= MAX_RANGE_DECALS) break;
+        (u.uDecalPos.value as THREE.Vector4[])[n].set(d.x, d.y, d.z, d.radius);
+        (u.uDecalCol.value as THREE.Vector4[])[n].set(d.color[0], d.color[1], d.color[2], d.alpha);
+        n++;
+      }
+      u.uDecalN.value = n;
+    }
 
     // 1. opaque scene (water is on layer 1; camera sees layer 0)
     this.ao?.beginFrame(camera, w, h);
@@ -200,7 +292,7 @@ export class WaterPass {
       this.dof ??= new DepthOfFieldPass();
       sceneTex = this.dof.run(r, rt.texture, rt.depthTexture!, camera, this.dofSettings, w, h); // PPSv1 order: DoF before bloom / grade
     }
-    this.bloom?.run(r, sceneTex, w, h);
+    if (this.bloomOn) this.bloom?.run(r, sceneTex, w, h);
 
     // 2. copy to the canvas
     this.copyMat.uniforms.tColor.value = sceneTex;
@@ -233,7 +325,7 @@ export class WaterPass {
     this.rt?.depthTexture?.dispose();
     this.rt = null;
     this.copyMat.dispose();
-    this.gradeLut?.dispose();
+    for (const t of this.gradeLuts.values()) t.dispose();
     this.bloom?.dispose();
     this.ao?.dispose();
     this.dof?.dispose();

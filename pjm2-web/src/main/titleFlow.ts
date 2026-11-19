@@ -36,6 +36,8 @@ export interface TitleHostDeps {
   solidBackdrop?: boolean;
   /** Tests/UI lab: no rAF loop; drive with step(dt). */
   manual?: boolean;
+  /** True while a full-screen overlay (loading screen) covers the title: the intro (logo drop, hut curtain, tikiman entrance) waits so it is seen. */
+  isBlocked?: () => boolean;
 }
 
 export class TitleHost {
@@ -55,7 +57,10 @@ export class TitleHost {
   private pendingGuideYes = true;
 
   constructor(private readonly d: TitleHostDeps) {
-    this.titleModel = new TitleModel({ needsGesture: !d.audioRunning() });
+    // The intro (logo drop, hut curtain, tikiman entrance) runs immediately on load; only the SOUND waits for the first gesture
+    // (browser autoplay policy): the jingle is replayed late on that gesture.
+    this.jinglePending = !d.audioRunning();
+    this.titleModel = new TitleModel({ needsGesture: false });
     this.title = new TitleFeature(d.assets, d.t, this.titleModel, {
       onPointerAny: () => this.onAny(),
       onClickEntry: (i) => { this.titleModel.hover(i); this.onTitleAction('confirm'); this.flush(); },
@@ -82,7 +87,7 @@ export class TitleHost {
       css(this.backdrop, { position: 'fixed', inset: '0', background: 'linear-gradient(#69c6f2 0%, #a6e0f7 55%, #7bc24a 56%, #5fa534 100%)', zIndex: '19' });
       document.body.appendChild(this.backdrop);
     }
-    if (this.titleModel.phase !== 'gate') this.d.ensureAudio(); // user already interacted: audio can start now
+    if (!this.jinglePending) this.d.ensureAudio(); // user already interacted: audio can start now
     this.title.attach();
     this.overlayRoot.attach();
     this.input.attach();
@@ -136,6 +141,7 @@ export class TitleHost {
     this.input.poll();
     const fl = this.d.flow.state;
     if (fl === 'title') {
+      if (this.d.isBlocked?.() === true) { this.title.update(0); return; }
       this.titleModel.update(dt);
       if (this.titleModel.phase === 'pressStart' || this.titleModel.phase === 'menu') this.titleBgm();
       this.title.update(dt);
@@ -148,9 +154,10 @@ export class TitleHost {
   }
 
   private bgmStarted = false;
+  private jinglePending = false;
 
   private titleBgm(): void {
-    if (this.bgmStarted) return;
+    if (this.bgmStarted || this.jinglePending) return;
     this.bgmStarted = true;
     void this.d.audio()?.playBgm(TITLE_BGM);
   }
@@ -158,6 +165,7 @@ export class TitleHost {
   private sfx(name: string): void {
     if (name === 'titlejingle') { (window as unknown as { __pjm2TitleIntro?: boolean }).__pjm2TitleIntro = true; window.dispatchEvent(new Event('pjm2:titleIntro')); } // hub: hut curtain + tikiman entrance
     const clip = SFX_FOR[name];
+    if (name === 'titlejingle' && !this.d.audioRunning()) { this.jinglePending = true; return; }
     if (clip !== undefined) void this.d.audio()?.play(clip);
   }
 
@@ -173,7 +181,12 @@ export class TitleHost {
 
   private onAny(): void {
     if (this.d.flow.state !== 'title') return;
-    if (this.titleModel.phase === 'gate') this.d.ensureAudio(); // gesture: create + unlock WebAudio
+    if (this.jinglePending) {
+      this.d.ensureAudio(); // first gesture: create + unlock WebAudio, then the missed jingle
+      this.jinglePending = false;
+      const c = SFX_FOR['titlejingle'];
+      if (c !== undefined) void this.d.audio()?.play(c);
+    }
     this.titleModel.press();
     this.flush();
   }

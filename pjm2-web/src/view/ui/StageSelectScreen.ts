@@ -257,8 +257,9 @@ export class StageSelectScreen {
       }));
       L.appendChild(this.f1(row.score[d] > 0 ? String(row.score[d]) : '-', px + 194, gy + 71, { scale: 0.95, tint: row.score[d] > 0 ? TEXT.gold.tint : TEXT.dim.tint, outline: TEXT.gold.outline }));
       if (sel) {
+        // web-port selection frame (the prefab has none): wraps label (centre gy, ~52 px) and score (centre gy+71, ~50 px) with 8 px padding
         const mark = document.createElement('div');
-        css(mark, { position: 'absolute', left: `${px + 20}px`, top: `${gy - 34}px`, width: `${355}px`, height: '112px', border: '4px solid #ffd959', borderRadius: '18px', pointerEvents: 'none', boxSizing: 'border-box' });
+        css(mark, { position: 'absolute', left: `${px + 16}px`, top: `${gy - 34}px`, width: `${355}px`, height: '136px', border: '4px solid #ffd959', borderRadius: '18px', pointerEvents: 'none', boxSizing: 'border-box' });
         L.appendChild(mark);
       }
     }

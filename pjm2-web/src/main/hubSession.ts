@@ -35,13 +35,21 @@ import { StageCamera } from '../view/stage/StageCamera';
 import { stageEnvironmentFor, skyEnvTextureUrl } from '../view/stage/StageEnvironment';
 import { StageSceneView } from '../view/stage/StageSceneView';
 import { DOF_PROFILES } from '../view/stage/DepthOfField';
-import { WaterPass } from '../view/stage/WaterPass';
+import { CameraSwitch, SWITCH_TOPDOWN, topDownSwitchOutFov } from '../view/stage/CameraSwitch';
+import { WaterPass, type PostProfile } from '../view/stage/WaterPass';
 import {
   hiddenLockNodes, hubPortals, lockCanUnlock, lockIsUnlocked, lockMissingRainbows, portalVisible, removedBlockerColliders,
   selectArea, selectLock, selectPortal, stagesOpenedBy, startPosition, titleCameraPose, titleTikimanPose, type CameraPose, type V3,
 } from '../view/hub/HubModel';
 import { disposeObject3D } from './disposeThree';
 import { HubHut } from '../view/hub/HubHut';
+import { buildHubTrees } from '../view/hub/HubTrees';
+import { TitleRainbow } from '../view/hub/TitleRainbow';
+import { installStageReflectionProbe, loadStageReflectionProbe } from '../view/stage/StageReflectionProbe';
+import { titleCrowdNodes } from '../view/hub/TitleCrowd';
+import { TITLE_BLOOM, TITLE_GRADE_PROFILE } from '../view/stage/TitleProfile';
+import { HubChibis } from '../view/hub/HubChibis';
+import { TreeView } from '../view/stage/TreeView';
 
 export type HubMode = 'title' | 'select' | 'credits';
 
@@ -71,6 +79,10 @@ export interface HubSession {
   readonly mode: HubMode;
   readonly debug: Record<string, unknown>;
   setMode(mode: HubMode): void;
+  /** True from creation until the first-show title intro (closeup -> camera switch -> hut curtain + tikiman entrance) has finished: the title UI waits (TitleScreenController.StartIntroAnimation waits for TitleIdle). */
+  readonly introPending: boolean;
+  /** Start the first-show intro (the shell calls it when the loading screen goes away). */
+  beginIntro(): void;
   onState(cb: (s: HubUiState) => void): () => void;
   frame(nowMs: number): void;
   resize(aspect: number): void;
@@ -90,6 +102,7 @@ export async function createHubSession(sh: HubServices): Promise<HubSession> {
   const ac = new AbortController();
   let disposed = false;
   let mode: HubMode = 'title';
+  const titlePost: PostProfile = { grade: TITLE_GRADE_PROFILE, bloom: search.has('nobloom') ? null : TITLE_BLOOM };
   const scene = new THREE.Scene();
   const waterPass = new WaterPass(renderer, scene, ENV.clearHex, 4, search.has('nograde') ? false : ENV.grade, renderExtrasFor(ENV, search));
   const ambient = addStageAmbient(scene, ENV.ambient.intensity, ENV.ambient.sh);
@@ -117,7 +130,7 @@ export async function createHubSession(sh: HubServices): Promise<HubSession> {
     renderer,
     sceneFile: 'scene-webp.json',
     textureConcurrency: 10,
-    blockingPriorityBelow: 8, // terrain + river first; the rest of the 183 textures stream behind
+    ...(new URLSearchParams(window.location.search).has('lazytex') ? { blockingPriorityBelow: 8 } : {}), // default: all hub textures load before the title shows
     mergeByMaterial: false, // per-renderer meshes (tagged with userData.nodeIndex) so AreaLock barriers / rainbows can be toggled
     assetCache: sh.assetCache,
     onProgress: (p) => {
@@ -129,7 +142,15 @@ export async function createHubSession(sh: HubServices): Promise<HubSession> {
   const library = new CharacterLibrary('/assets/characters/', sh.assetCache);
   const collidersLoad: Promise<StageCollidersJson> = fetch(`${BASE}physics/3d_stage_000_colliders.json`).then((r) => (r.ok ? r.json() : Promise.reject(new Error(`hub colliders ${r.status}`))));
   collidersLoad.catch(() => { /* handled where awaited */ });
-  const skyReady = sky.apply().then(() => { scene.background = new THREE.Color(ENV.clearHex); });
+  // The hub's baked HDR ReflectionProbe (ReflectionProbe pid 7749, cubemap `ReflectionProbe-0` in BuildPlayer-3d_stage_000_editor.sharedAssets, box 134.5 x 20.9 x 78.4,
+  // tools/stages/extract_reflection_probe.py): the original deferred terrain/standard shaders add its Fresnel reflection (grazing angles = the pale haze on distant hills).
+  let probeTexture: THREE.Texture | null = null;
+  const probeLoad = search.has('noprobe') ? Promise.resolve(null) : loadStageReflectionProbe(BASE);
+  const skyReady = sky.apply().then(async () => {
+    scene.background = new THREE.Color(ENV.clearHex);
+    const probe = await probeLoad;
+    if (probe) { probeTexture = probe.texture; installStageReflectionProbe(scene, probe.texture, probe.meta.intensity); }
+  });
   const [, collidersJson] = await Promise.all([
     stageView.load().then(() => {
       scene.add(stageView.group);
@@ -137,7 +158,7 @@ export async function createHubSession(sh: HubServices): Promise<HubSession> {
       if (riverMat) waterPass.setWater(stageView.riverMeshes, riverMat as THREE.ShaderMaterial);
     }),
     collidersLoad,
-    library.loadMany(['tikiman_01', 'mask_00', 'carapace_00']),
+    library.loadMany(['tikiman_01', 'mask_00', 'carapace_00', 'chibi_00']),
     skyReady,
   ]);
 
@@ -146,6 +167,24 @@ export async function createHubSession(sh: HubServices): Promise<HubSession> {
   if (!search.has('nohut')) {
     hut = await HubHut.load(stageView.materials.get('home_001_m') ?? null);
     if (hut !== null) scene.add(hut.root);
+  }
+
+  // ---- title rainbow (ef_ui_bg_rainbow_pv under GameCameraTitle) ----
+  const rainbow = await TitleRainbow.load();
+  if (rainbow !== null) scene.add(rainbow.root);
+
+  // ---- NPC chibis (chibi_01 PrefabLoaders) ----
+  let hubChibis: HubChibis | null = null;
+  let titleCrowd: HubChibis | null = null;
+  if (!search.has('nochibis') && library.get('chibi_00') !== null) {
+    hubChibis = new HubChibis(() => library.instantiate('chibi_00'));
+    scene.add(hubChibis.root);
+    if (!search.has('nocrowd')) { titleCrowd = new HubChibis(() => library.instantiate('chibi_00'), titleCrowdNodes()); scene.add(titleCrowd.root); } // title-only decorative crowd (orig_main.png)
+  }
+
+  // ---- hub trees (PrefabLoader random lists; skipped by the scene export) ----
+  if (!search.has('notrees')) {
+    try { const ta = await TreeView.load('/assets/trees/'); const g = buildHubTrees(ta); if (g.children.length > 0) scene.add(g); } catch (err) { console.warn('hub trees unavailable', err); }
   }
 
   // ---- physics + mover --------------------------------------------------------------------
@@ -196,17 +235,48 @@ export async function createHubSession(sh: HubServices): Promise<HubSession> {
     playerView?.face({ x: titleStand.forward[0], z: titleStand.forward[2] });
   }
   standOnTitleSpot();
+  stageCamera.snap(toThreeV([player.x, player.y, player.z])); // the intro opens on the follow camera, already framed on the hut / tikiman
   /** Q4.TitleScreenController `m_hasSeenTitleIntro` (+0xb3): the hut/entrance plays once per session, later shows use TitleScreenEnterV2. */
   let titleIntroPlayed = false;
   function startTitleAnim(): void {
+    rainbow?.start(); // ShowRainbowTitle
     if (!titleIntroPlayed) hut?.playCurtain(); // StartIntroAnimation: Home Animator.SetTrigger(TitleScreenEnter), first show only
     playerView?.startTitle(!titleIntroPlayed);
     titleIntroPlayed = true;
   }
   playerView?.holdTitleEnter(); // InitIntroAnimation: TitleScreenEnterWait until the title intro starts
-  // The title model's intro phase (jingle) starts the entrance (TitleScreenController.StartIntroAnimation).
-  if ((window as unknown as { __pjm2TitleIntro?: boolean }).__pjm2TitleIntro === true) startTitleAnim(); // the title intro began before the hub finished loading
-  window.addEventListener('pjm2:titleIntro', () => { if (!disposed && mode === 'title') startTitleAnim(); }, { signal: ac.signal });
+
+  // ---- first-show intro (TitleScreenController.Update / StartIntroAnimation) -----------------------
+  // Original order: the default camera (GameCameraTopDown, a tight close-up of the hut / tikiman at the origin) is active -> Update calls
+  // CameraManager.SwitchCameraTo<GameCameraTitle>(blend): the top-down camera's GameCameraSwitchBlackInOut zooms in (FOV -30 deg/s) while fading to black for
+  // 0.3 s, then the camera swaps to GameCameraTitle (in front of the hut) and the switch callback runs StartIntroAnimation: hut curtain + tikiman
+  // TitleScreenEnter (4.5 s).  The coroutine waits for the player animator to reach TitleIdle, and only THEN does the title UI (logo drop + jingle) run.
+  // `?nointro` keeps the old behaviour (title camera from the start, the logo drives the entrance).
+  const introSeq = !search.has('nointro');
+  let introPhase: 'wait' | 'closeup' | 'enter' | 'done' = introSeq ? 'wait' : 'done';
+  const introSwitch = new CameraSwitch('top');
+  let introFov = 18;
+  let introEnterWall = 0; // failsafe: the title UI never waits longer than this for the entrance animation
+  let fadeEl: HTMLDivElement | null = null;
+  function setFade(a: number): void {
+    if (a <= 0.001) { if (fadeEl !== null) fadeEl.style.opacity = '0'; return; }
+    if (fadeEl === null) {
+      fadeEl = document.createElement('div');
+      fadeEl.style.cssText = 'position:fixed;inset:0;background:#000;pointer-events:none;z-index:4;opacity:0';
+      document.body.appendChild(fadeEl);
+    }
+    fadeEl.style.opacity = String(Math.min(1, a));
+  }
+  function startEntrance(): void {
+    if (!titleIntroPlayed) hut?.playCurtain();
+    if (playerView === null) introPhase = 'done'; else playerView.startTitle(!titleIntroPlayed, () => { introPhase = 'done'; });
+    titleIntroPlayed = true;
+    introEnterWall = 0;
+  }
+  // The title UI's own intro (jingle) starts the rainbow ("appears as the logo lands"); with the sequence on, the entrance has already run.
+  function onTitleUiIntro(): void { if (titleIntroPlayed) rainbow?.start(); else startTitleAnim(); }
+  if ((window as unknown as { __pjm2TitleIntro?: boolean }).__pjm2TitleIntro === true) onTitleUiIntro(); // the title intro began before the hub finished loading
+  window.addEventListener('pjm2:titleIntro', () => { if (!disposed && mode === 'title') onTitleUiIntro(); }, { signal: ac.signal });
 
   // ---- node visibility (AreaLock barriers, stage rainbows) ----------------------------------
   const meshesByNode = new Map<number, THREE.Object3D[]>();
@@ -319,6 +389,7 @@ export async function createHubSession(sh: HubServices): Promise<HubSession> {
       const last = save?.getLastPlayStageName() ?? null;
       const start = startPosition(last === '' ? null : last, portals);
       playerView?.endTitle(); // TitleScreenExit -> Idle
+      rainbow?.stop(); // HideRainbow
       placePlayer(start);
       mover?.teleportToGround(start[0], start[2]);
       if (mover !== null) { player.y = mover.y; }
@@ -377,6 +448,9 @@ export async function createHubSession(sh: HubServices): Promise<HubSession> {
     }
     playerView?.update(dt);
     hut?.update(dt);
+    rainbow?.update(dt, viewCam.quaternion);
+    hubChibis?.update(dt);
+    if (titleCrowd !== null) { titleCrowd.root.visible = blendTarget === 0 && blend < 0.5; if (titleCrowd.root.visible) titleCrowd.update(dt); }
     stageView.tickWater(dt);
 
     // camera: follow pose (GameCameraTopDown) <-> title pose, eased
@@ -388,13 +462,24 @@ export async function createHubSession(sh: HubServices): Promise<HubSession> {
       const step = Math.min(wall, 0.25) / CAMERA_BLEND_SECONDS; // wall-clock so slow frames do not stretch the cut
       blend = blendTarget > blend ? Math.min(blendTarget, blend + step) : Math.max(blendTarget, blend - step);
     }
-    const e = blend * blend * (3 - 2 * blend);
+    // first-show intro: closeup on the follow camera -> SwitchCameraTo(title) (zoom + black) -> entrance (see startEntrance)
+    if (introPhase === 'closeup') {
+      if (introSwitch.inOutPhase) introFov = topDownSwitchOutFov(introFov, SWITCH_TOPDOWN, dt);
+      const st = introSwitch.update(dt);
+      setFade(st.fade);
+      if (st.swapped) { introPhase = 'enter'; blend = 0; blendTarget = 0; startEntrance(); }
+    } else if (introSwitch.switching) setFade(introSwitch.update(dt).fade);
+    if (introPhase === 'enter') { introEnterWall += wall; if (introEnterWall > 8) introPhase = 'done'; }
+    const onFollowCam = introPhase === 'wait' || introPhase === 'closeup';
+    const e = onFollowCam ? 1 : blend * blend * (3 - 2 * blend);
     viewCam.position.lerpVectors(titleCamPos, followPos, e);
     viewCam.quaternion.slerpQuaternions(titleCamQuat, followQuat, e);
-    viewCam.fov = titlePose.fov + (stageCamera.camera.fov - titlePose.fov) * e;
+    viewCam.fov = onFollowCam ? introFov : titlePose.fov + (stageCamera.camera.fov - titlePose.fov) * e;
     viewCam.updateProjectionMatrix();
     viewCam.updateMatrixWorld(true);
-    waterPass.setDof(blendTarget === 0 && blend < 0.5 ? DOF_PROFILES.title : null); // GameCameraTitle -> 3d_stage_title_1_pp (DoF on); the follow camera is topdown_pp (off)
+    const titleCam = !onFollowCam && blendTarget === 0 && blend < 0.5;
+    waterPass.setDof(titleCam ? DOF_PROFILES.title : null);
+    waterPass.setPostProfile(titleCam ? titlePost : null); // GameCameraTitle -> 3d_stage_title_1_pp (grade + bloom)
     waterPass.render(viewCam);
   }
 
@@ -413,6 +498,11 @@ export async function createHubSession(sh: HubServices): Promise<HubSession> {
     safe('outline/toon', () => { outlineHandle?.dispose(); toonHandle?.dispose(); });
     safe('skeleton', () => characterRoot.traverse((o) => { (o as THREE.SkinnedMesh).skeleton?.dispose(); }));
     safe('hut', () => hut?.dispose());
+    safe('rainbow', () => rainbow?.dispose());
+    safe('reflection probe', () => { probeTexture?.dispose(); probeTexture = null; });
+    safe('hub chibis', () => hubChibis?.dispose());
+    safe('title crowd', () => titleCrowd?.dispose());
+    safe('intro fade', () => fadeEl?.remove());
     safe('player', () => playerView?.dispose());
     safe('stage view', () => stageView.dispose());
     safe('water pass', () => waterPass.dispose());
@@ -444,12 +534,58 @@ export async function createHubSession(sh: HubServices): Promise<HubSession> {
     hubPortals: () => portals.map((p) => ({ stage: p.stage, pos: p.pos, visible: portalIsVisible(p) })),
     hubSnapCamera: () => { blend = blendTarget; },
     hubCamera: () => ({ pos: viewCam.position.toArray(), blend }),
+    /** Debug: what the title camera sees under NDC (nx,ny in -1..1): nearest hits (mesh/node/material names). */
+    hubRainbow: () => rainbow?.state ?? null,
+    /** Debug: fast-forward the rainbow emitter by `sec` seconds (headless frames are slow). */
+    /** Debug (headless colour calibration): force the title view, apply toggles, render once and read back pixels at NDC points -> [r,g,b] 0..255. */
+    hubProbe: (opts: { fog?: { color: number; density: number }; envOff?: boolean; shadows?: boolean; sun?: number; fill?: number; ambient?: number; point?: number; bloom?: number; dof?: boolean; grade?: boolean }, pts: [number, number][]) => {
+      const saved = stageView.lights.map((l) => [l, l.intensity, (l as THREE.DirectionalLight).castShadow] as const);
+      const amb = ambient.probe.intensity;
+      for (const [l, i] of saved) {
+        const dl = l as THREE.DirectionalLight;
+        if (dl.isDirectionalLight) { if (dl.castShadow || dl.shadow?.camera !== undefined && dl.name === 'Directional Light') l.intensity = i * (opts.sun ?? 1); else l.intensity = i * (opts.fill ?? 1); if (opts.shadows === false) dl.castShadow = false; }
+        else l.intensity = i * (opts.point ?? 1);
+      }
+      ambient.probe.intensity = amb * (opts.ambient ?? 1);
+      const prevBloom = titlePost.bloom;
+      if (opts.bloom !== undefined) titlePost.bloom = opts.bloom === 0 ? null : { ...TITLE_BLOOM, intensity: TITLE_BLOOM.intensity * opts.bloom };
+      waterPass.setPostProfile(null); waterPass.setPostProfile(titlePost);
+      waterPass.setDof(opts.dof === false ? null : DOF_PROFILES.title);
+      viewCam.position.copy(titleCamPos); viewCam.quaternion.copy(titleCamQuat); viewCam.fov = titlePose.fov; viewCam.updateProjectionMatrix(); viewCam.updateMatrixWorld(true);
+      const prevFog = scene.fog; const prevEnv = scene.environment; const prevEI = (scene as unknown as { environmentIntensity?: number }).environmentIntensity;
+      if (opts.fog !== undefined) scene.fog = new THREE.FogExp2(opts.fog.color, opts.fog.density);
+      if (opts.envOff === true) scene.environment = null;
+      renderer.shadowMap.needsUpdate = true;
+      waterPass.render(viewCam);
+      scene.fog = prevFog; scene.environment = prevEnv; void prevEI;
+      const gl = renderer.getContext(); const w = gl.drawingBufferWidth, h = gl.drawingBufferHeight; const px = new Uint8Array(4);
+      const out = pts.map(([nx, ny]) => { gl.readPixels(Math.round((nx * 0.5 + 0.5) * (w - 1)), Math.round((ny * 0.5 + 0.5) * (h - 1)), 1, 1, gl.RGBA, gl.UNSIGNED_BYTE, px); return [px[0], px[1], px[2]]; });
+      for (const [l, i, c] of saved) { l.intensity = i; (l as THREE.DirectionalLight).castShadow = c; }
+      ambient.probe.intensity = amb; titlePost.bloom = prevBloom;
+      return out;
+    },
+    hubFreezeRainbow: () => rainbow?.debugFreeze(),
+    hubAdvanceRainbow: (sec: number) => { for (let t = 0; t < sec; t += 0.05) rainbow?.update(0.05, viewCam.quaternion); },
+    hubPost: () => ({ ...waterPass.postState, blend, blendTarget }),
+    hubNode: (n: number) => (meshesByNode.get(n) ?? []).map((o) => { o.updateWorldMatrix(true, false); const b = new THREE.Box3().setFromObject(o); return { name: o.name, world: o.getWorldPosition(new THREE.Vector3()).toArray(), visible: o.visible, parent: o.parent?.name, parentWorld: o.parent?.getWorldPosition(new THREE.Vector3()).toArray(), box: [...b.min.toArray(), ...b.max.toArray()].map((v) => +v.toFixed(1)) }; }),
+    hubPick: (nx: number, ny: number) => {
+      viewCam.updateMatrixWorld();
+      const rc = new THREE.Raycaster();
+      rc.setFromCamera(new THREE.Vector2(nx, ny), viewCam);
+      return rc.intersectObjects(scene.children, true).slice(0, 4).map((h) => {
+        const o = h.object as THREE.Mesh;
+        const m = o.material as THREE.Material | THREE.Material[];
+        return { d: +h.distance.toFixed(2), name: o.name, node: o.userData?.nodeIndex ?? null, mat: Array.isArray(m) ? m.map((x) => x.name) : m?.name, at: h.point.toArray().map((v) => +v.toFixed(2)) };
+      });
+    },
   };
 
   return {
     sceneId: '3d_stage_000',
     get disposed() { return disposed; },
     get mode() { return mode; },
+    get introPending() { return introPhase !== 'done'; },
+    beginIntro() { if (introPhase === 'wait') { introPhase = 'closeup'; introFov = stageCamera.camera.fov; introSwitch.request(); } },
     debug,
     setMode,
     onState(cb) { listeners.add(cb); return () => { listeners.delete(cb); }; },

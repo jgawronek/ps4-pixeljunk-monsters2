@@ -274,3 +274,20 @@ describe('conformed ring (projected onto terrain)', () => {
     expect(g.scale.x).toBe(2); // back to flat unit geometry
   });
 });
+
+describe('RangeIndicator decal sink (depth-projected ring)', () => {
+  it('publishes a mirrored world-space decal instead of showing meshes, and removes it on hide/dispose', () => {
+    const scene = new THREE.Scene();
+    const ri = new RangeIndicator(scene, { opacity: 0.5 });
+    const calls: unknown[] = [];
+    ri.setDecalSink({ setRangeDecal: (id, d) => calls.push([id, d]) });
+    ri.show({ x: 3, y: 1, z: -2 }, 5.3);
+    const d = (calls[0] as [string, { x: number; y: number; z: number; radius: number; alpha: number }])[1];
+    expect(d).toMatchObject({ x: -3, y: 1, z: -2, radius: 5.3, alpha: 0.5 });
+    expect(ri.visible).toBe(true);
+    expect(scene.getObjectByName('RangeIndicator')?.visible).toBe(false); // no mesh drawn
+    ri.hide();
+    expect((calls[1] as [string, unknown])[1]).toBeNull();
+    expect(ri.visible).toBe(false);
+  });
+});

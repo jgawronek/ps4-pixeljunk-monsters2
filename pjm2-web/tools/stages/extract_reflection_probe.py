@@ -111,14 +111,16 @@ def main():
             d = o.read()
             if d.m_Name == 'ReflectionProbe-0' and d.m_TextureFormat == 24:
                 cubes[fn] = d
-        elif o.type.name == 'ReflectionProbe' and fn.startswith('BuildPlayer-3d_stage_') and fn.endswith('_env'):
+        elif o.type.name == 'ReflectionProbe' and fn.startswith('BuildPlayer-3d_stage_') and (fn.endswith('_env') or fn.endswith('_editor')):
             probes[fn] = o.read_typetree()
     for scene in scenes:
         key = f'BuildPlayer-{scene}_env.sharedAssets'
         cube = cubes.get(key)
+        if cube is None and scene == '3d_stage_000':  # the hub's probe cubemap (RenderSettings/ReflectionProbe pid 7749 -> file 2 pid 269) lives in the editor sharedAssets
+            key = f'BuildPlayer-{scene}_editor.sharedAssets'; cube = cubes.get(key)
         if cube is None:
             print(f'{scene}: no baked probe'); continue
-        pt = probes.get(f'BuildPlayer-{scene}_env', {})
+        pt = probes.get(f'BuildPlayer-{scene}_env', probes.get(f'BuildPlayer-{scene}_editor', {}))
         faces = decode_cube(cube.image_data)
         data, mips = build_equirect(faces)
         peak = max(max(max(p) for p in row) for row in faces[0][0])

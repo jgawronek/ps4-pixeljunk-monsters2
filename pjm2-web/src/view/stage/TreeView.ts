@@ -293,6 +293,8 @@ export interface TreeViewAssets {
   /** tree_002 master scenes (optional — when absent/empty, tree_002
    *  requests fall back to the tree_001 templates). */
   variants002?: THREE.Object3D[];
+  /** Hub-only species (tree_006/007/008/010) master scenes, by species. */
+  hub?: Record<string, THREE.Object3D[]>;
 }
 
 /** Deterministic variant pick from a stable index — replaces
@@ -440,7 +442,7 @@ export class TreeView {
       recs = manifest.variants ?? [];
     } catch (err) {
       console.warn('TreeView: manifest unavailable — using fallback trees', err);
-      return { variants: [], variants002: [] };
+      return { variants: [], variants002: [], hub: {} };
     }
     let useWebp = false;
     if (typeof fetch === 'function') {
@@ -473,12 +475,15 @@ export class TreeView {
     const scenes = await Promise.all(recs.map((r) => loadOne(r.file)));
     const variants: THREE.Object3D[] = [];
     const variants002: THREE.Object3D[] = [];
+    const hub: Record<string, THREE.Object3D[]> = {};
     for (let i = 0; i < scenes.length; i++) {
       const s = scenes[i];
       if (s === null) continue;
-      (recs[i].species === 'tree_002' ? variants002 : variants).push(s);
+      const sp = recs[i].species;
+      if (sp !== undefined && sp !== 'tree_001' && sp !== 'tree_002') (hub[sp] ??= []).push(s); // hub-only species (tree_006/007/008/010)
+      else (sp === 'tree_002' ? variants002 : variants).push(s);
     }
-    return { variants, variants002 };
+    return { variants, variants002, hub };
   }
 
   /** Add a tree at a UNITY-space position (mirrored x→−x). Deterministic

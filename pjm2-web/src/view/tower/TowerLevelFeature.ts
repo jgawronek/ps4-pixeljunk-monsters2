@@ -190,13 +190,13 @@ export class TowerLevelFeature {
   }
 
   /** Per-frame: selection, dance EXP, overlay. `moving`: player is walking this frame. */
-  update(dt: number, moving: boolean, gameOver: boolean): void {
+  update(dt: number, moving: boolean, gameOver: boolean, locked = false): void {
     const player = this.deps.player();
     this.pollGamepad();
     // Never leave the player stuck in a modal ring: the game ended (clear / game over) -> close it.
     if (gameOver && this.interaction.isOpen) this.interaction.cancel();
     this.moving = moving;
-    this.interaction.updateSelection();
+    this.interaction.updateSelection(locked);
 
     // ---- tower-EXP dance (Q4.Player.CheckForTowers) ----
     const pos = player.position;

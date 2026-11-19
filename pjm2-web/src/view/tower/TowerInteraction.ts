@@ -86,7 +86,8 @@ export class TowerInteraction {
   }
 
   /** PlayerStructureSelector.UpdateSelection: nearest tower whose trigger the player is inside. */
-  updateSelection(): void {
+  /** `locked` (pre-wave countdown): nothing can be selected, and an open ring closes. */
+  updateSelection(locked = false): void {
     const p = this.deps.playerPos();
     let best: GameCoreTower | null = null;
     let bestD = Infinity;
@@ -100,7 +101,7 @@ export class TowerInteraction {
         bestD = d;
       }
     }
-    this.selected = best;
+    this.selected = locked ? null : best;
     // OnOutHover: leaving the trigger (or the tower disappearing) closes the ring.
     if (this.isOpen && (this.target === null || this.target.isDestroyed() || this.selected !== this.target)) {
       this.close(false);

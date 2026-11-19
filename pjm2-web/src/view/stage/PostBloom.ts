@@ -141,7 +141,7 @@ export class BloomChain {
     uBloomTexel: { value: new THREE.Vector2(1, 1) },
   };
 
-  constructor(private readonly params: BloomParams) {
+  constructor(private params: BloomParams) {
     const mk = (frag: string, u: Record<string, THREE.IUniform>) => new THREE.ShaderMaterial({
       vertexShader: VERT, fragmentShader: frag, uniforms: u, depthTest: false, depthWrite: false, blending: THREE.NoBlending,
     });
@@ -210,6 +210,8 @@ export class BloomChain {
     this.applyUniforms.uBloom.value.set(d.sampleScale, d.intensity, 0);
     this.applyUniforms.uBloomTexel.value.set(1 / last.width, 1 / last.height);
   }
+
+  setParams(p: BloomParams): void { this.params = p; (this.pre.uniforms.uAnti as THREE.IUniform).value = p.antiFlicker ? 1 : 0; }
 
   private free(): void {
     for (const t of [...this.down_, ...this.up_]) t.dispose();

@@ -142,7 +142,7 @@ export class TitleFeature {
     css(this.footerBottom, { position: 'absolute', left: '0', top: '0', width: '0', height: '0', pointerEvents: 'none' });
     this.footerBottom.appendChild(copy);
     this.root.bottom.appendChild(this.footerBottom);
-    const ver = f1(this.assets, `${t('tl_title_010', 'ver.')} 0001`, L.version.x, L.version.y, { scale: 0.45, align: 'left', tint: TEXT.dim.tint });
+    const ver = f1(this.assets, `${t('tl_title_010', 'ver.')} 01.04`, L.version.x, L.version.y, { scale: 0.45, align: 'left', tint: TEXT.dim.tint });
     this.footer.appendChild(ver);
     this.root.top.appendChild(this.footer);
 

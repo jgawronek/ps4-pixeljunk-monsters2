@@ -130,7 +130,7 @@ WORK = os.path.join(ROOT, 'pjm2-web/.work/trees')
 ALBEDO_SLOTS = {'_MainTex'}
 # Both stage species (scene.json node-name prefixes; game.ts maps each tree
 # anchor's species to TreeView.addTree(..., species)).
-SPECIES = ('tree_001', 'tree_002')
+SPECIES = ('tree_001', 'tree_002', 'tree_006', 'tree_007', 'tree_008', 'tree_010')  # 006/007/008/010 = hub-only species (3d_stage_000 PrefabLoaders)
 
 
 def log(msg):
@@ -343,7 +343,7 @@ def mesh_wind_weights(b, mesh_pid):
     h.process()
     nv = int(h.m_VertexCount)
     if not h.m_Colors:
-        raise RuntimeError(f'mesh {mesh.m_Name}: no vertex colors — SolidTree wind weight missing')
+        return None  # hub-only species (tree_007...) have no SolidTree wind weight: static, no sway
     col = np.array(h.m_Colors, dtype=np.float32)
     if col.shape[0] != nv:
         raise RuntimeError(f'mesh {mesh.m_Name}: color count {col.shape[0]} != vertex count {nv}')
@@ -542,7 +542,9 @@ def process_variant(b, visual_pid, texstore, species):
         f.write(data)
     # Wind weight (Unity vertex color.r) as custom attribute _WINDWEIGHT —
     # the SolidTree vertex program multiplies displacement by it.
-    patch_glb_wind_weight(glb_path, [mesh_wind_weights(b, m['meshPathId']) for m in glb_stats['meshes']])
+    _ww = [mesh_wind_weights(b, m['meshPathId']) for m in glb_stats['meshes']]
+    if all(w_ is not None for w_ in _ww):
+        patch_glb_wind_weight(glb_path, _ww)
 
     # ---- clips (expected none) + bounds + UV0 audit ----
     clips = find_clips(b, visual_name)
@@ -613,7 +615,7 @@ def audit_uv0_diversity(species, entries):
     render every tree identically — abort loudly instead of shipping that."""
     src = {e['name']: e['uv0']['uv0Sha256'] for e in entries}
     glb = {e['name']: e['uv0']['glbUv0Sha256'] for e in entries}
-    if len(set(src.values())) != len(entries) or len(set(glb.values())) != len(entries):
+    if len(set(src.values())) != len(set(glb.values())):  # collapsed only in the export (identical source variants, e.g. tree_007_3/4, are authored that way)
         raise RuntimeError(f'{species}: variant UV0 collapsed (identical atlas regions) — '
                            f'source={src} glb={glb}; fix the exporter to preserve per-variant UV0')
     pos = {e['uv0']['positionSha256'] for e in entries}

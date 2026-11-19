@@ -52,6 +52,9 @@ import { IntroSequenceSkipCommand } from '../core/network/IntroSequenceSkipComma
 import { HipAttackEnemyCommand } from '../core/network/HipAttackEnemyCommand';
 import { DOF_PROFILES } from '../view/stage/DepthOfField';
 import { PlayerBump } from '../view/player/PlayerBump';
+import { PlayerHipAttack, HIP_ATTACK, type HipEvent, type HipTarget } from '../view/player/PlayerHipAttack';
+import { HipAttackMarker } from '../view/player/HipAttackMarker';
+import { AIHelper } from '../core/AIHelper';
 import { setSimPhysics, Q4Layers } from '../core/physics-seam';
 import { loadStageWorld, PhysicsWorld } from '../engine/physics/world';
 import { nextStage, stageConfigFor, stageFromSearch } from '../data/stageCatalog';
@@ -81,6 +84,7 @@ import { SimDriver } from './sim-driver';
 import { StageSceneView } from '../view/stage/StageSceneView';
 import { stageEnvironmentFor, skyEnvTextureUrl } from '../view/stage/StageEnvironment';
 import { StageCamera } from '../view/stage/StageCamera';
+import { StageCameraModes } from './stageCameraModes';
 import { GroundPicker } from '../view/stage/GroundPicker';
 import { CharacterLibrary } from '../view/characters/CharacterLibrary';
 import { createEnemyViewerFactory, EnemyStageView, setEnemyGroundProbe } from '../view/characters/EnemyStageView';
@@ -326,7 +330,7 @@ const SFX_NAMES = [
   'sfx/sfx_item_coin', 'sfx/sfx_item_gem', 'sfx/sfx_menu_countdownbase', 'sfx/sfx_menu_countdownfinal',
   'sfx/sfx_tower_buildcomplete', 'sfx/sfx_tower_buildtower', 'sfx/sfx_tower_rotate',
   'sfx/sfx_tower_levelup', 'sfx/sfx_tower_levelcomplete',
-  'sfx/sfx_tiki_dancejingle',
+  'sfx/sfx_tiki_dancejingle', 'sfx/sfx_tiki_jump', 'sfx/sfx_tiki_hipattack', 'sfx/sfx_tiki_hipattackenemy',
   'sfx/sfx_towerarrow_shoot', 'sfx/sfx_towerarrow_hit',
   'sfx/sfx_stage_wavestart', 'sfx/sfx_stage_firstwave',
   'sfx/sfx_stage_waveclear', 'sfx/sfx_stage_gameclearperfect',
@@ -477,6 +481,7 @@ export async function createStageSession(sh: ShellServices, opts: StageSessionOp
     keyboardPan: false, edgeMargin: 0, fov: STAGE_ENV.camera.fov, pitchDeg: STAGE_ENV.camera.pitchDeg, yawDeg: STAGE_ENV.camera.yawDeg,
     // Web-port extension: the original boom is fixed at 30 (min = max); the mouse wheel zooms 18..45 here (ZoomIn/ZoomOut @00448df0/00448ea0 smoothing is the original's).
     distance: 30, minDistance: 18, maxDistance: 45,
+    follow: { focusScalesWithZoom: false }, // zoom stays centred on the player (the faithful zoomRate scaling drags the view toward the origin / hut)
   });
   stageCamera.resize(window.innerWidth / window.innerHeight);
   stageCamera.attach(renderer.domElement);
@@ -492,6 +497,7 @@ export async function createStageSession(sh: ShellServices, opts: StageSessionOp
     color: new THREE.Color().setRGB(1, 0.5, 0.25, THREE.SRGBColorSpace),
     opacity: 0.5,
   });
+  rangeIndicator.setDecalSink(waterPass); // projected onto the visible scenery (depth-buffer decal), not a mesh
   function showTreeRange(tree: GameCoreTree): void {
     if (world === null) return;
     rangeIndicator.show(tree.position, prefabRangeRadius(world.towerPrefab as never)); // the detector's real attack radius
@@ -553,6 +559,7 @@ export async function createStageSession(sh: ShellServices, opts: StageSessionOp
   const towerViews = new Map<number, { view: TowerStageView; tower: GameCoreTower; fade?: { f: ObjectFade; r: FadedRenderers } }>();
   /** Range ring of the tower the player stands at (Structure.SetSelected -> StructureRangeEffect; detectColor yellow). */
   const selectedRange = new RangeIndicator(scene, { color: new THREE.Color().setRGB(1, 0.9216, 0.0157, THREE.SRGBColorSpace), opacity: 0.5 });
+  selectedRange.setDecalSink(waterPass);
   let selectedRangeKey = '';
   let selOutline: { h: OutlineHandle; w: number } | null = null;
   let selOutlineId = -1;
@@ -777,6 +784,8 @@ export async function createStageSession(sh: ShellServices, opts: StageSessionOp
     meshParticles?.update(dt);
     sheetParticles.update(dt);
     projectileParticles?.update(dt);
+    if (gameUi?.countdownActive === true) { rangeIndicator.hide(); if (walkTarget?.tree != null) walkTarget = null; } // selection state is dropped when the countdown begins
+    if (gameUi?.countdownActive === true && buildMenu !== null) { for (let i = 0; i < 4 && buildMenu.isOpen; i++) buildMenu.cancel(); } // countdown began with the ring open: close it
     rangeIndicator.update(dt);
     selectedRange.update(dt);
   }
@@ -793,14 +802,26 @@ export async function createStageSession(sh: ShellServices, opts: StageSessionOp
     for (const k of pos) if (moveKeys.has(k)) q = Math.max(q, moveKeyOrder.get(k) ?? 0);
     return q === n ? 0 : q > n ? 1 : -1;
   };
+  // Player camera controls (docs/CAMERA_ANALYSIS.md): Q/C = TopDown <-> Behind camera, J/L/I/K = right stick (top-down pan / behind rotate), F = DoF focus forward.
+  const cameraModes = new StageCameraModes({
+    stageCamera,
+    keys: moveKeys,
+    blocked: () => !started || world === null || outcome !== null || (shell?.paused ?? false) || (introController?.active ?? false) || towerLevel?.ringOpen === true || buildMenu?.isOpen === true,
+    player: () => (playerMesh === null ? { x: 0, y: 0, z: 0 } : { x: -playerMesh.position.x, y: playerMesh.position.y, z: playerMesh.position.z }),
+  });
   window.addEventListener('keydown', (e) => {
     // Tower interaction (E/Enter = interact, ring menu keys) consumes the key first.
     if (started && !e.repeat && !(shell?.paused ?? false) && towerLevel?.onKey(e.code)) {
       e.preventDefault();
       return;
     }
+    if (cameraModes.onKeyDown(e.code, e.repeat)) { e.preventDefault(); return; }
     if (!moveKeys.has(e.code)) moveKeyOrder.set(e.code, ++moveKeySeq);
     if (!e.repeat) playerBump.press(); // EnemyStunRecoverPresses: mashing a button recovers from the bump stun
+    if (e.code === 'Space' && started && !(shell?.paused ?? false)) {
+      e.preventDefault(); // page scroll
+      if (!e.repeat) hip.press(); // PlayerController.ReceiveJumpInput: jump on the ground, hip attack ("press jump again") while a "!" target is shown
+    }
     moveKeys.add(e.code);
     }, { signal: ac.signal });
   window.addEventListener('keyup', (e) => {
@@ -841,6 +862,7 @@ export async function createStageSession(sh: ShellServices, opts: StageSessionOp
         nearest = t;
       }
     }
+    if (gameUi?.countdownActive === true) nearest = null; // pre-wave countdown: trees can't be selected
     if (nearest !== null && nearestD < 2.0) {
       walkTarget = { pos: nearest.position.clone(), tree: nearest };
       buildQueuedFor = -1;
@@ -856,6 +878,29 @@ export async function createStageSession(sh: ShellServices, opts: StageSessionOp
   let walkStuckTime = 0;
   /** Enemy contact bump (PlayerMotor.BumpEnemyLogic / BumpPlayer): knockback, 3.5 s stun (5 presses recover), 2 s invulnerability, coin spill. */
   const playerBump = new PlayerBump();
+  /** Jump + hip attack (PlayerMotor.Jump / Attack, TikimanStateJump / Attack / AttackBounce): docs/HIP_ATTACK_ANALYSIS.md. */
+  const hip = new PlayerHipAttack();
+  const hipMarker = new HipAttackMarker();
+  scene.add(hipMarker.sprite);
+  /** Player view contract read by HipAttackEnemyCommand (Q4.Player +0x18/+0x1C/+0x20 on the tikiman_01 prefab: oneKickOneBalloon 0, strengthType 1, classType 1). */
+  let playerViewRegistered = false;
+  const toHipTarget = (e: GameCoreEnemy): HipTarget => ({ handle: e.handle, pos: { x: e.position.x, y: e.position.y, z: e.position.z }, height: e.collision.height });
+  function onHipEvent(ev: HipEvent): void {
+    switch (ev.type) {
+      case 'jump': playerView?.playJump(ev.running); void A()?.play('sfx/sfx_tiki_jump'); break; // CommandSoundEffect index 0 = GlobalSounds.PlayerJump
+      case 'attackStart': playerView?.playHipAttack(); void A()?.play('sfx/sfx_tiki_hipattack'); break; // index 4 = PlayerHipAtackStart
+      case 'pound': playerView?.playHipPound(); break;
+      case 'bounce':
+        playerView?.playHipBounce();
+        void A()?.play('sfx/sfx_tiki_hipattackenemy'); // index 5 = PlayerHipAtackHit
+        // TikimanStateAttackBounce.Enter: HipAttackEnemyCommand(enemy, HipAttackPower, 0, 0, 1, 1) when an enemy was hit
+        if (ev.target !== null && world !== null) {
+          world.driver.addPlayerCommand(new HipAttackEnemyCommand(ev.target.handle as GameCoreEnemy['handle'], HIP_ATTACK.power, HIP_ATTACK.dropCoins, HIP_ATTACK.dropGems, HIP_ATTACK.valuePerCoin, HIP_ATTACK.valuePerGem), world.player);
+        }
+        break;
+      case 'land': playerView?.endAir(ev.fromBounce); break;
+    }
+  }
 
   /**
    * Advance the original-faithful locomotion (PlayerMover = PlayerMotor +
@@ -874,11 +919,61 @@ export async function createStageSession(sh: ShellServices, opts: StageSessionOp
     if (Math.abs(p.position.x - m.x) > 0.02 || Math.abs(p.position.z - m.z) > 0.02) {
       m.teleportToGround(p.position.x, p.position.z);
     }
+    if (!playerViewRegistered && world !== null) {
+      playerViewRegistered = true;
+      registerUnityObject(world.player.handle.m_handle, {
+        playerID: world.player.playerId, transform: { position: world.player.position }, gameObject: null, motor: null,
+        strengthType: EEnemyStrengthTypeDef.Normal, classType: EEnemyClassTypeDef.Normal, oneKickOneBalloon: false,
+      });
+    }
     playerBump.tick(dt);
     if (playerBump.stunned) { moverIntent.x = 0; moverIntent.z = 0; walkTarget = null; }
-    m.update(dt, moverIntent, { run: moveKeys.has('ShiftLeft') || moveKeys.has('ShiftRight'), canMove: !playerBump.stunned });
+    // Jump / hip attack (PlayerMotor.UpdateMotor: StateMachine.Tick before UpdateMovementInternal)
+    const hipBlocked = playerBump.stunned || m.mode !== 'normal' || outcome !== null || (introController?.active ?? false) || (shell?.paused ?? false);
+    const hipTick = hip.tick({
+      dt, pos: { x: m.x, y: m.y, z: m.z }, vy: m.vy, grounded: m.groundedCC,
+      facing: { x: m.fx, z: m.fz }, moving: Math.hypot(m.vx, m.vz) > 0.5,
+      holdJump: moveKeys.has('Space'), blocked: hipBlocked, holdingFruit: world!.player.isHoldingFruit,
+      groundWithin: (up, down) => m.groundWithin(up, down),
+      findTarget: (c, r, h) => {
+        const e = AIHelper.findClosestObject<GameCoreEnemy>(GameCoreEnemy, new Vector3(c.x, c.y, c.z), r, h);
+        return e !== null && e.life > 0 && !e.isDestroyed() ? toHipTarget(e) : null;
+      },
+      lookup: (handle) => {
+        for (const e of world!.core.allObjects<GameCoreEnemy>(GameCoreEnemy)) if (e.handle.m_handle === (handle as GameCoreEnemy['handle']).m_handle) return e.life > 0 && !e.isDestroyed() ? toHipTarget(e) : null;
+        return null;
+      },
+    });
+    for (const ev of hipTick.events) onHipEvent(ev);
+    const hc = hipTick.control;
+    if (hc.velocity !== null) {
+      if (hc.velocity.x !== undefined) m.vx = hc.velocity.x;
+      if (hc.velocity.y !== undefined) m.vy = hc.velocity.y;
+      if (hc.velocity.z !== undefined) m.vz = hc.velocity.z;
+      m.groundedCC = false;
+    }
+    if (hip.diving) { moverIntent.x = 0; moverIntent.z = 0; } // hover / dive / bounce: no steering (OverrideVel, DisableMovement)
+    m.update(dt, moverIntent, {
+      run: moveKeys.has('ShiftLeft') || moveKeys.has('ShiftRight'), canMove: !playerBump.stunned && hc.canMove,
+      ...(hc.gravity !== null ? { gravity: hc.gravity } : {}), freeze: hc.freeze, external: hc.external,
+    });
+    // Dive contact (OnCollisionEnter with an enemy / WorldCollisionHandler with any controller hit) -> AttackLogic -> AttackBounce
+    if (hip.state === 'attack') {
+      let touching: HipTarget | null = null;
+      for (const e of world!.core.allObjects<GameCoreEnemy>(GameCoreEnemy)) {
+        if (e.life <= 0 || e.isDestroyed()) continue;
+        const c = e.collision;
+        if (PlayerBump.touching({ x: m.x, y: m.y, z: m.z }, PLAYER_CC.radius, PLAYER_CC.height, { x: e.position.x, y: e.position.y, z: e.position.z }, c.radius, c.height)) { touching = toHipTarget(e); break; }
+      }
+      for (const ev of hip.afterMove({ pos: { x: m.x, y: m.y, z: m.z }, contact: m.contact, touching, facing: { x: m.fx, z: m.fz } })) {
+        if (ev.type === 'bounce') { m.vx = ev.velocity.x; m.vy = ev.velocity.y; m.vz = ev.velocity.z; m.groundedCC = false; }
+        onHipEvent(ev);
+      }
+    }
+    // "!" over the target (HUDHipAttackIcon via Events.hipAttackConditionEvent)
+    hipMarker.update(dt, hip.target !== null ? { x: hip.target.pos.x, y: hip.target.pos.y + hip.target.height, z: hip.target.pos.z } : null);
     // Enemy contact (OnTriggerEnter/Stay on the enemy trigger volumes): bump the player away and arm the loose-coin spill.
-    if (m.mode === 'normal' && playerBump.canBeBumped && outcome === null && !(introController?.active ?? false)) {
+    if (m.mode === 'normal' && playerBump.canBeBumped && !hip.diving && outcome === null && !(introController?.active ?? false)) {
       const player = { x: m.x, y: m.y, z: m.z };
       for (const e of world!.core.allObjects<GameCoreEnemy>(GameCoreEnemy)) {
         if (e.life <= 0 || e.isDestroyed()) continue;
@@ -888,6 +983,7 @@ export async function createStageSession(sh: ShellServices, opts: StageSessionOp
         if (r === null) break;
         m.vx = r.velocity.x; m.vy = r.velocity.y; m.vz = r.velocity.z;
         m.groundedCC = false;
+        if (hip.airborneAction) { hip.cancel(); playerView?.endAir(false); } // BumpPlayer replaces the jump state with TikimanStateBounce
         world!.driver.addPlayerCommand(
           new HipAttackEnemyCommand(e.handle, 0, r.drop.coins, r.drop.gems, r.drop.valuePerCoin, r.drop.valuePerGem), world!.player);
         break;
@@ -935,7 +1031,7 @@ export async function createStageSession(sh: ShellServices, opts: StageSessionOp
     if (ix !== 0 || iz !== 0) {
       walkTarget = null; // manual input cancels auto-walk
       wasdFrames++;
-      const dir = stageCamera.mapInput(ix, iz);
+      const dir = cameraModes.mapInput(ix, iz) ?? stageCamera.mapInput(ix, iz); // Behind camera: stick relative to the boom yaw
       const ux = dir.x, uz = dir.z;
       playerMoveUnity.x = ux;
       playerMoveUnity.z = uz;
@@ -1292,7 +1388,7 @@ export async function createStageSession(sh: ShellServices, opts: StageSessionOp
       tickPlayerMovement(dt);
       world.driver.step(dt);
       world.driver.lateUpdate();
-      towerLevel?.update(dt, playerMoveUnity.x !== 0 || playerMoveUnity.z !== 0, outcome !== null);
+      towerLevel?.update(dt, playerMoveUnity.x !== 0 || playerMoveUnity.z !== 0, outcome !== null, gameUi?.countdownActive ?? false);
     }
     if (started && world !== null) {
       const uiDt = shell?.paused ? 0 : dt;
@@ -1317,8 +1413,10 @@ export async function createStageSession(sh: ShellServices, opts: StageSessionOp
     if (wheelZoom !== 0) { if (wheelZoom > 0) stageCamera.zoomOut(1, 0.25 * wheelZoom); else stageCamera.zoomIn(1, -0.25 * wheelZoom); wheelZoom = 0; }
     stageCamera.update(dt);
     introController?.applyCamera(); // intro cut overrides the follow pose until the hand-off
+    cameraModes.setPlayerMove(playerMoveUnity.x, playerMoveUnity.z);
+    cameraModes.update(dt); // player camera: top-down pan (right stick) / Behind camera + its switch transition
     // PPSv1 DoF: only the GameCameraIntro01 cut uses 3d_stage_NNN_behind_pp (DoF enabled); Intro02 / TopDown use topdown_pp (DoF off).
-    waterPass.setDof(introController !== null && introController.active && !introController.timeline.followActive && introController.timeline.cutIndex === 0 ? DOF_PROFILES.stageBehind : null);
+    waterPass.setDof(introController !== null && introController.active && !introController.timeline.followActive && introController.timeline.cutIndex === 0 ? DOF_PROFILES.stageBehind : cameraModes.dofSettings()); // Behind camera: behind_pp with the animated focusDistance (UpdateDepthOfField)
     waterPass.render(stageCamera.camera);
 
     const frameMs = wallDelta * 1000;
@@ -1428,6 +1526,7 @@ export async function createStageSession(sh: ShellServices, opts: StageSessionOp
           const d = Vector3.Distance(t.position, target);
           if (d < nearestD) { nearestD = d; nearest = t; }
         }
+        if (gameUi?.countdownActive === true) nearest = null; // pre-wave countdown: trees can't be selected
         walkTarget = nearest !== null && nearestD < 2.0
           ? { pos: nearest.position.clone(), tree: nearest }
           : { pos: target, tree: null };
@@ -1730,10 +1829,9 @@ export async function createStageSession(sh: ShellServices, opts: StageSessionOp
       renderer,
       sceneFile: 'scene-webp.json', // repacked textures (falls back to scene.json)
       textureConcurrency: 10,
-      blockingPriorityBelow: 8, // terrain + river gate Start; props/huts stream in behind
-      // props/huts textures (60MB) wait until the critical bytes (packs, terrain) are in, so they
-      // never compete with them for bandwidth on slow links; on fast links this is ~instant.
-      deferNonBlockingUntil: packsHighPriorityLoaded(),
+      // ALL textures gate Start (no streaming-in behind the loading screen); `?lazytex` restores the old split
+      // (terrain + river gate Start, props/huts stream in behind the critical packs).
+      ...(new URLSearchParams(window.location.search).has('lazytex') ? { blockingPriorityBelow: 8, deferNonBlockingUntil: packsHighPriorityLoaded() } : {}),
       assetCache,
       onProgress: (p) => {
         const pct = p.totalBytes > 0 ? (p.loadedBytes / p.totalBytes) * 100 : 0;
@@ -1744,7 +1842,7 @@ export async function createStageSession(sh: ShellServices, opts: StageSessionOp
 
     const library = new CharacterLibrary('/assets/characters/', assetCache);
     libraryRef = library;
-    const eagerTowers = new URLSearchParams(window.location.search).has('eagertowers');
+    const eagerTowers = !new URLSearchParams(window.location.search).has('lazytowers'); // towers load before Start by default now
     const coreCharacters = library.loadMany(CHARACTER_DEFS);
     const lateCharacters = coreCharacters.then(() => library.loadMany(CHARACTER_LATE_DEFS));
     setTowerFlagFactory((lvl) => (library.get(`flag_001_${lvl}`) !== null ? library.instantiate(`flag_001_${lvl}`) : null));
@@ -1933,7 +2031,8 @@ export async function createStageSession(sh: ShellServices, opts: StageSessionOp
         else rangeIndicator.show(tree.position, prefabRangeRadius(prefab as never));
       },
       towerSelected: () => towerLevel?.interaction.selected != null,
-      blocked: () => (shell?.paused ?? false) || (shell?.resultsVisible ?? false) || outcome !== null,
+      // no tower building while the pre-wave 3-2-1 countdown runs, until the wave has started
+      blocked: () => (shell?.paused ?? false) || (shell?.resultsVisible ?? false) || outcome !== null || (gameUi?.countdownActive ?? false),
       singletonBuilt: (name) => {
         for (const tw of world?.core.allObjects<GameCoreTower>(GameCoreTower) ?? []) {
           if ((tw as unknown as { prefabName: string }).prefabName === name) return true;
@@ -1979,6 +2078,7 @@ export async function createStageSession(sh: ShellServices, opts: StageSessionOp
       // Range rings drape over the TERRAIN only (props/trees excluded).
       const terrainOnly = new GroundConform(createQueries(physicsWorld), { mask: Q4Layers.landscapeMask });
       rangeIndicator.setHeightProvider((x, z) => terrainOnly.groundHeight(x, z));
+      selectedRange.setHeightProvider((x, z) => terrainOnly.groundHeight(x, z));
       physicsLoaded = true;
     } catch (err) {
       console.warn('physics world failed to load — null-physics fallback:', err);
@@ -2169,6 +2269,7 @@ export async function createStageSession(sh: ShellServices, opts: StageSessionOp
   function dispose(): void {
     if (disposed) return;
     disposed = true;
+    safe('camera modes', () => cameraModes.dispose());
     safe('listeners', () => ac.abort());
     safe('intro', () => { introController?.dispose(); introController = null; introCardRef?.root.detach(); introCardRef = null; });
     safe('touch', () => { touch?.detach(); touch = null; });
@@ -2192,6 +2293,7 @@ export async function createStageSession(sh: ShellServices, opts: StageSessionOp
     safe('tower flags', () => { setTowerFlagFactory(null); });
     safe('chibi avoidance', () => { setChibiAvoidanceZoneNotifier(null); });
     safe('chibis', () => { if (chibiView !== null) { dropOutline(chibiView.root); dropToon(chibiView.root); chibiView.dispose(); chibiView = null; } });
+    safe('hipMarker', () => hipMarker.dispose());
     safe('player', () => { if (playerView !== null) { dropOutline(playerView.root); dropToon(playerView.root); playerView.dispose(); playerView = null; } });
     safe('trees', () => { treeView?.dispose(); treeView = null; });
     safe('grass', () => { grassView?.dispose(); grassView = null; });
